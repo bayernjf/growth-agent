@@ -45,4 +45,14 @@ curl http://127.0.0.1:8790/healthz
 
 ## 当前状态
 
-T-A1 脚手架（双方言迁移、healthz、五门）。任务进度见上述任务拆解文档。
+- W1–W9 已完成（本地 main，无 remote、不 push）：数据层/状态机（T-A2）、zeus
+  决策客户端与入站 webhook（T-A3/T-A5）、GSC/SERP/Publisher 连接器 offline 契约
+  （T-B1/B2/B3、T-C1、T-D1）、QA 三闸（T-E1/E2/E3）、GitHub publisher 与入站
+  webhook（T-D2/D3）、每日剧本/对账/成本/周报（T-A4/A6/A7/A8）、compose 部署与
+  自托管指南（T-F1/F2/F3）、loom 端口+mock（T-E4）、三站点配置/离线全链路冒烟/
+  30 天数据包（T-H1/H2/H3）。`npm run check:all` 五门全绿，`npm run smoke:offline`
+  离线全链路冒烟通过。
+- 明确未做（卡外部，不影响离线链路）：真实 GSC/SERP/GitHub 在线 e2e（T-B4/T-C2/
+  T-D4，需真实凭据）、真实 30 天连跑（T-H4）、dogfood 评审与定价（T-H5，卡 owner
+  决策）；loom 仅 mock，真实字段/路径待 openapi 对照后接 adapter。
+- 部署见 `deploy/SELF_HOSTING.md`，任务进度见 bayjf 仓 tier0 任务拆解文档。
