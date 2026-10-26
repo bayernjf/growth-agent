@@ -16,6 +16,19 @@ export interface AppConfig {
   zeusCallbackUrl?: string | undefined;
   /** Shared secret (>=16 chars) zeus HMAC-signs outbound events with. */
   zeusWebhookSecret?: string | undefined;
+  /** GSC read-only connector (T-B1/B2). off = deterministic offline fixture. */
+  gscMode: 'off' | 'online';
+  gscClientId?: string | undefined;
+  gscClientSecret?: string | undefined;
+  /** Directory holding the sealed refresh-token file (§8 gsc_tokens volume). */
+  gscTokenDir: string;
+  /** §8 GROWTH_MASTER_KEY (AES-256 key for the sealed GSC token; env-only). */
+  growthMasterKey?: string | undefined;
+  /** SERP BYOK connector (T-C1). off = deterministic offline fixture. */
+  serpMode: 'off' | 'online';
+  /** DataForSEO HTTP-BASIC credentials (login + password; BYOK). */
+  serpLogin?: string | undefined;
+  serpPassword?: string | undefined;
 }
 
 function num(name: string, fallback: number): number {
@@ -28,6 +41,8 @@ function num(name: string, fallback: number): number {
 export function loadConfig(): AppConfig {
   const dbDriver = process.env.GA_DB_DRIVER === 'postgres' ? 'postgres' : 'sqlite';
   const zeusMode = process.env.GA_ZEUS_MODE === 'online' ? 'online' : 'off';
+  const gscMode = process.env.GA_GSC_MODE === 'online' ? 'online' : 'off';
+  const serpMode = process.env.GA_SERP_MODE === 'online' ? 'online' : 'off';
   return {
     host: process.env.GA_HOST ?? '127.0.0.1',
     port: num('GA_PORT', 8790),
@@ -39,5 +54,13 @@ export function loadConfig(): AppConfig {
     zeusToken: process.env.GA_ZEUS_TOKEN || undefined,
     zeusCallbackUrl: process.env.GA_ZEUS_CALLBACK_URL || undefined,
     zeusWebhookSecret: process.env.GA_ZEUS_WEBHOOK_SECRET || undefined,
+    gscMode,
+    gscClientId: process.env.GA_GSC_CLIENT_ID || undefined,
+    gscClientSecret: process.env.GA_GSC_CLIENT_SECRET || undefined,
+    gscTokenDir: process.env.GA_GSC_TOKEN_DIR ?? './data/gsc-tokens',
+    growthMasterKey: process.env.GA_GROWTH_MASTER_KEY || undefined,
+    serpMode,
+    serpLogin: process.env.GA_SERP_DATAFORSEO_LOGIN || undefined,
+    serpPassword: process.env.GA_SERP_DATAFORSEO_PASSWORD || undefined,
   };
 }

@@ -1,6 +1,10 @@
 node_modules/
 dist/
 data/
+# Encrypted GSC refresh-token volume (§8); never a raw-token file.
+gsc-tokens/
+*.gsc-token.json
 *.log
 .env
+.env.local
 .DS_Store
