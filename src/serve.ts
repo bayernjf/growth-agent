@@ -16,6 +16,11 @@ import {
   WebhookDeliveryRepository,
 } from './connector/zeus/webhook-repository.js';
 import { GithubWebhookRepository } from './publisher/github/webhook-repository.js';
+import { createZeusDecisionClient } from './connector/zeus/registry.js';
+import {
+  runStartupChecks,
+  type StartupCheckReport,
+} from './startup/self-check.js';
 
 async function createDriver(): Promise<StorageDriver> {
   const config = loadConfig();
@@ -37,34 +42,41 @@ async function main(): Promise<void> {
     process.loadEnvFile('.env');
   }
   const config = loadConfig();
-  // Fail-closed boot check (T-A5): inbound webhook verification needs the same
-  // shared secret zeus signs with. An online deployment without it must refuse
-  // to start rather than silently accept unsigned lifecycle events.
-  if (config.zeusMode === 'online' && (config.zeusWebhookSecret ?? '').length < 16) {
-    throw new Error(
-      'GA_ZEUS_MODE=online requires GA_ZEUS_WEBHOOK_SECRET (>=16 chars) to verify inbound zeus webhooks',
-    );
-  }
-  // Inbound GitHub PR events must be verified: an online publisher deployment
-  // without the webhook secret must refuse to start rather than accept
-  // unsigned lifecycle events.
-  if (config.githubMode === 'online' && (config.githubWebhookSecret ?? '').length < 16) {
-    throw new Error(
-      'GA_GITHUB_MODE=online requires GA_GITHUB_WEBHOOK_SECRET (>=16 chars) to verify inbound GitHub webhooks',
-    );
-  }
   const driver = await createDriver();
+  // 1. Migrations always run on boot (idempotent; growth-os convention).
   await migrateUp(driver);
 
+  const tasks = new GrowthTaskRepository(driver);
+  const failures = new ChannelFailureRepository(driver);
+  const zeus = createZeusDecisionClient(config);
+
+  // 2. Startup self-check chain (T-F2): credential presence, zeus ping +
+  // webhook re-subscription, decision reconciliation. Fails closed.
+  const startupReport: StartupCheckReport = await runStartupChecks({
+    config,
+    driver,
+    zeus,
+    tasks,
+    failures,
+    now: () => new Date().toISOString(),
+  });
+
   const app = new Hono();
-  app.route('/', createHealthApp({ dbDialect: driver.dialect, zeusMode: config.zeusMode }));
+  app.route(
+    '/',
+    createHealthApp({
+      dbDialect: driver.dialect,
+      zeusMode: config.zeusMode,
+      getStartupReport: () => startupReport,
+    }),
+  );
   app.route(
     '/webhooks/zeus',
     createZeusWebhookApp({
       secret: config.zeusWebhookSecret ?? '',
       deliveries: new WebhookDeliveryRepository(driver),
-      failures: new ChannelFailureRepository(driver),
-      tasks: new GrowthTaskRepository(driver),
+      failures,
+      tasks,
       now: () => new Date().toISOString(),
     }),
   );
@@ -73,15 +85,15 @@ async function main(): Promise<void> {
     createGithubWebhookApp({
       secret: config.githubWebhookSecret ?? '',
       deliveries: new GithubWebhookRepository(driver),
-      failures: new ChannelFailureRepository(driver),
-      tasks: new GrowthTaskRepository(driver),
+      failures,
+      tasks,
       now: () => new Date().toISOString(),
     }),
   );
 
   serve({ fetch: app.fetch, hostname: config.host, port: config.port }, () => {
     console.log(
-      `growth-agent listening on http://${config.host}:${config.port} (db=${config.dbDriver}, zeus=${config.zeusMode})`,
+      `growth-agent listening on http://${config.host}:${config.port} (db=${config.dbDriver}, zeus=${config.zeusMode}, status=${startupReport?.status ?? 'unknown'})`,
     );
   });
 }
