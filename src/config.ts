@@ -8,10 +8,14 @@ export interface AppConfig {
   apiToken?: string | undefined;
   dbDriver: 'sqlite' | 'postgres';
   sqlitePath: string;
-  /** zeus decision kernel integration (T-A3). off = fail closed. */
+  /** zeus decision kernel integration (T-A3). off = deterministic offline. */
   zeusMode: 'off' | 'online';
   zeusUrl?: string | undefined;
   zeusToken?: string | undefined;
+  /** Public URL zeus POSTs lifecycle events to (self-check re-subscription). */
+  zeusCallbackUrl?: string | undefined;
+  /** Shared secret (>=16 chars) zeus HMAC-signs outbound events with. */
+  zeusWebhookSecret?: string | undefined;
 }
 
 function num(name: string, fallback: number): number {
@@ -33,5 +37,7 @@ export function loadConfig(): AppConfig {
     zeusMode,
     zeusUrl: process.env.GA_ZEUS_URL || undefined,
     zeusToken: process.env.GA_ZEUS_TOKEN || undefined,
+    zeusCallbackUrl: process.env.GA_ZEUS_CALLBACK_URL || undefined,
+    zeusWebhookSecret: process.env.GA_ZEUS_WEBHOOK_SECRET || undefined,
   };
 }
