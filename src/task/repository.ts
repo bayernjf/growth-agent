@@ -98,6 +98,15 @@ export class GrowthTaskRepository {
     return row ? this.map(row) : undefined;
   }
 
+  /** Resolve the local task a zeus decision event refers to (§2.2). */
+  async findByZeusDecisionId(decisionId: string): Promise<GrowthTask | undefined> {
+    const row = await this.driver.get<GrowthTaskRow>(
+      `SELECT ${COLUMNS} FROM growth_tasks WHERE zeus_decision_id = ? LIMIT 1`,
+      [decisionId],
+    );
+    return row ? this.map(row) : undefined;
+  }
+
   async list(status?: GrowthTaskStatus): Promise<GrowthTask[]> {
     const rows =
       status === undefined
