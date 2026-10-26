@@ -21,7 +21,21 @@ export type GrowthAgentErrorCode =
   | 'INTERNAL_ERROR'
   // local integration errors.
   | 'DECISION_UNAVAILABLE'
-  | 'CREDENTIAL_MISSING';
+  | 'CREDENTIAL_MISSING'
+  // GSC read-only connector (design §4.1 error-semantics table, verbatim codes).
+  | 'GSC_CREDENTIAL_MISSING'
+  | 'GSC_AUTH_REVOKED'
+  | 'GSC_SCOPE_INSUFFICIENT'
+  | 'GSC_QUOTA'
+  | 'GSC_SITE_FORBIDDEN'
+  // Shared upstream-unavailable (§4.1 network/5xx row; reused by SERP).
+  | 'UPSTREAM_UNAVAILABLE'
+  // SERP BYOK provider billing (§4.2: balance exhausted, non-retryable).
+  | 'PROVIDER_BILLING'
+  // Publisher token / permission failures (§4.3).
+  | 'PUBLISH_AUTH'
+  // Encrypted credential store corruption (§8: bad master key, tampered ciphertext).
+  | 'CREDENTIAL_STORAGE_INVALID';
 
 export class GrowthAgentError extends Error {
   readonly code: GrowthAgentErrorCode;
@@ -66,4 +80,31 @@ export const GrowthAgentErrors = {
   /** online mode selected but url/token (or the bearer was rejected) missing. */
   credentialMissing: (message: string) =>
     new GrowthAgentError('CREDENTIAL_MISSING', message, 422),
+  // --- GSC read-only connector (§4.1 table) ---
+  gscCredentialMissing: (message: string) =>
+    new GrowthAgentError('GSC_CREDENTIAL_MISSING', message, 422),
+  /** refresh token revoked: re-run the OAuth installed-app flow (401, non-retryable). */
+  gscAuthRevoked: (message: string, details?: unknown) =>
+    new GrowthAgentError('GSC_AUTH_REVOKED', message, 401, false, details),
+  /** token lacks webmasters.readonly scope: install-time fail-closed (403). */
+  gscScopeInsufficient: (message: string, details?: unknown) =>
+    new GrowthAgentError('GSC_SCOPE_INSUFFICIENT', message, 403, false, details),
+  /** quotaExceeded / userRateLimit: bounded backoff, partial snapshot (429, retryable). */
+  gscQuota: (message: string, details?: unknown) =>
+    new GrowthAgentError('GSC_QUOTA', message, 429, true, details),
+  /** site not shared with this OAuth client / deleted: flag site disabled (403). */
+  gscSiteForbidden: (message: string, details?: unknown) =>
+    new GrowthAgentError('GSC_SITE_FORBIDDEN', message, 403, false, details),
+  /** Network error / upstream 5xx for GSC and SERP connectors (503, retryable). */
+  upstreamUnavailable: (message: string, details?: unknown) =>
+    new GrowthAgentError('UPSTREAM_UNAVAILABLE', message, 503, true, details),
+  /** Provider balance exhausted (§4.2): notify owner to top up; never retry. */
+  providerBilling: (message: string, details?: unknown) =>
+    new GrowthAgentError('PROVIDER_BILLING', message, 402, false, details),
+  /** Publisher token invalid / missing write scope (§4.3, non-retryable). */
+  publishAuth: (message: string, details?: unknown) =>
+    new GrowthAgentError('PUBLISH_AUTH', message, 401, false, details),
+  /** Master key absent at runtime / wrong length / GCM auth-tag failure (§8). */
+  credentialStorageInvalid: (message: string, details?: unknown) =>
+    new GrowthAgentError('CREDENTIAL_STORAGE_INVALID', message, 500, false, details),
 };
