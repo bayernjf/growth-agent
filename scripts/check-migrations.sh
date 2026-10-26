@@ -32,4 +32,7 @@ done
 if [ "$fail" -ne 0 ]; then
   exit 1
 fi
-echo "OK: paired migrations ($(echo "$sql_files" | wc -l | tr -d ' ') files each, sqlite + postgres)"
+# Count files directly from disk: `echo "$empty" | wc -l` reports 1 for an
+# empty string, which would print "1 files each" on a fresh scaffold.
+file_count=$(find "$SQL_DIR" -name '*.sql' | wc -l | tr -d ' ')
+echo "OK: paired migrations ($file_count files each, sqlite + postgres)"
