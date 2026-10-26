@@ -47,6 +47,17 @@ export class WebhookDeliveryRepository {
     return row ? this.map(row) : undefined;
   }
 
+  /** Deliveries recorded in the inclusive timestamp range [from, to). */
+  async list(from: string, to: string): Promise<WebhookDeliveryRow[]> {
+    const rows = await this.driver.all<DeliveryDbRow>(
+      `SELECT * FROM zeus_webhook_deliveries
+       WHERE created_at >= ? AND created_at < ?
+       ORDER BY created_at ASC`,
+      [from, to],
+    );
+    return rows.map(r => this.map(r));
+  }
+
   /**
    * Durably record one signed delivery. A pre-check `find()` already decided
    * dedupe, so this is an INSERT; ON CONFLICT DO NOTHING makes a race-safe
@@ -172,6 +183,26 @@ export class ChannelFailureRepository {
       [id],
     );
     return row ? this.map(row) : undefined;
+  }
+
+  /** All failure aggregates whose latest occurrence is in [from, to). */
+  async list(from?: string, to?: string): Promise<ChannelFailureRow[]> {
+    const where: string[] = [];
+    const params: unknown[] = [];
+    if (from !== undefined) {
+      where.push('last_at >= ?');
+      params.push(from);
+    }
+    if (to !== undefined) {
+      where.push('last_at < ?');
+      params.push(to);
+    }
+    const sql =
+      'SELECT * FROM channel_failures' +
+      (where.length > 0 ? ` WHERE ${where.join(' AND ')}` : '') +
+      ' ORDER BY attempts DESC, last_at DESC';
+    const rows = await this.driver.all<ChannelFailureDbRow>(sql, params);
+    return rows.map(r => this.map(r));
   }
 
   private map(row: ChannelFailureDbRow): ChannelFailureRow {

@@ -52,6 +52,17 @@ export class GithubWebhookRepository {
     return row ? this.map(row) : undefined;
   }
 
+  /** Deliveries recorded in the inclusive timestamp range [from, to). */
+  async list(from: string, to: string): Promise<GithubDeliveryRow[]> {
+    const rows = await this.driver.all<DeliveryDbRow>(
+      `SELECT * FROM github_webhook_deliveries
+       WHERE created_at >= ? AND created_at < ?
+       ORDER BY created_at ASC`,
+      [from, to],
+    );
+    return rows.map(r => this.map(r));
+  }
+
   /** Insert once; ON CONFLICT DO NOTHING makes a raced duplicate a no-op. */
   async record(row: GithubDeliveryRow): Promise<void> {
     await this.driver.run(
