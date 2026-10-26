@@ -1,0 +1,27 @@
+{
+  "id": "job-agent-landing",
+  "gsc": {
+    "siteUrl": "https://job-agent-landing.pages.dev/"
+  },
+  "serp": {
+    "locationCode": 2840,
+    "languageCode": "en",
+    "location": "United States",
+    "language": "English"
+  },
+  "github": {
+    "owner": "bayernjf",
+    "repo": "job-agent-landing",
+    "baseBranch": "main"
+  },
+  "watchQueries": [
+    "ai job application agent",
+    "automated resume tailoring",
+    "job search copilot"
+  ],
+  "keywordSeeds": [
+    "ai job application tool",
+    "resume tailoring agent",
+    "automated job search copilot"
+  ]
+}

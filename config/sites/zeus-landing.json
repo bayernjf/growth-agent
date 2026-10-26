@@ -1,0 +1,27 @@
+{
+  "id": "zeus-landing",
+  "gsc": {
+    "siteUrl": "https://zeus-landing.pages.dev/"
+  },
+  "serp": {
+    "locationCode": 2840,
+    "languageCode": "en",
+    "location": "United States",
+    "language": "English"
+  },
+  "github": {
+    "owner": "bayernjf",
+    "repo": "zeus-landing",
+    "baseBranch": "main"
+  },
+  "watchQueries": [
+    "ai decision kernel",
+    "human in the loop approval agent",
+    "policy grade decision engine"
+  ],
+  "keywordSeeds": [
+    "ai decision engine human approval",
+    "llm policy kernel",
+    "agent approval workflow"
+  ]
+}

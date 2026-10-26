@@ -1,0 +1,27 @@
+{
+  "id": "bayjf.com",
+  "gsc": {
+    "siteUrl": "https://bayjf.com/"
+  },
+  "serp": {
+    "locationCode": 2840,
+    "languageCode": "en",
+    "location": "United States",
+    "language": "English"
+  },
+  "github": {
+    "owner": "bayernjf",
+    "repo": "bayjf",
+    "baseBranch": "main"
+  },
+  "watchQueries": [
+    "bayjf portfolio",
+    "astral growth agent",
+    "byok growth pr agent"
+  ],
+  "keywordSeeds": [
+    "self hosted growth agent",
+    "byok seo automation",
+    "astral developer portfolio"
+  ]
+}
