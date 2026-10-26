@@ -67,6 +67,108 @@ describe('001_growth_tasks migration (sqlite execution)', () => {
   });
 });
 
+describe('002_zeus_webhook migration (sqlite execution)', () => {
+  it('applies on the already-migrated database and is idempotent on a second run', async () => {
+    const status = await migrationStatus(db);
+    expect(status.applied).toContain('002_zeus_webhook');
+    expect(status.pending).toEqual([]);
+    expect(await migrateUp(db)).toEqual([]);
+  });
+
+  it('creates zeus_webhook_deliveries and channel_failures with usable columns', async () => {
+    await db.run(
+      `INSERT INTO zeus_webhook_deliveries
+         (delivery_id, decision_id, event_type, task_id, signature_valid,
+          processing_result, error_code, event_payload, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        'dec_x:approved:2026-10-26T08:00:00.000Z',
+        'dec_x',
+        'approved',
+        'gt_x',
+        1,
+        'accepted',
+        null,
+        '{"type":"approved"}',
+        '2026-10-26T09:00:00.000Z',
+        '2026-10-26T09:00:00.000Z',
+      ],
+    );
+    await db.run(
+      `INSERT INTO channel_failures
+         (id, channel, reason, external_ref, retryable, attempts, last_error, created_at, last_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        'cf:zeus_webhook:INVALID_SIGNATURE',
+        'zeus_webhook',
+        'INVALID_SIGNATURE',
+        'dec_x:approved:2026-10-26T08:00:00.000Z',
+        0,
+        1,
+        'mismatch',
+        '2026-10-26T09:00:00.000Z',
+        '2026-10-26T09:00:00.000Z',
+      ],
+    );
+    const delivery = await db.get<{ processing_result: string }>(
+      'SELECT processing_result FROM zeus_webhook_deliveries WHERE delivery_id = ?',
+      ['dec_x:approved:2026-10-26T08:00:00.000Z'],
+    );
+    expect(delivery?.processing_result).toBe('accepted');
+    const failure = await db.get<{ attempts: number }>(
+      'SELECT attempts FROM channel_failures WHERE id = ?',
+      ['cf:zeus_webhook:INVALID_SIGNATURE'],
+    );
+    expect(failure?.attempts).toBe(1);
+  });
+});
+
+describe('002_zeus_webhook migration (postgres dialect structural check, no live PG)', () => {
+  const sqliteSql = readFileSync(
+    join(repoRoot, 'db', 'migrations', 'sqlite', '002_zeus_webhook.sql'),
+    'utf8',
+  );
+  const pgSql = readFileSync(
+    join(repoRoot, 'db', 'migrations', 'postgres', '002_zeus_webhook.sql'),
+    'utf8',
+  );
+
+  it('creates the same two tables in both dialects', () => {
+    for (const table of ['zeus_webhook_deliveries', 'channel_failures']) {
+      expect(sqliteSql).toContain(`CREATE TABLE IF NOT EXISTS ${table}`);
+      expect(pgSql).toContain(`CREATE TABLE IF NOT EXISTS ${table}`);
+    }
+  });
+
+  it('stores the event payload as TEXT on sqlite and JSONB on postgres', () => {
+    expect(sqliteSql).toContain('event_payload TEXT');
+    expect(pgSql).toContain('event_payload JSONB');
+  });
+
+  it('declares boolean columns as INTEGER on sqlite and BOOLEAN on postgres', () => {
+    expect(sqliteSql).toContain('signature_valid INTEGER NOT NULL DEFAULT 1');
+    expect(pgSql).toContain('signature_valid BOOLEAN NOT NULL DEFAULT true');
+    expect(sqliteSql).toContain('retryable INTEGER NOT NULL DEFAULT 0');
+    expect(pgSql).toContain('retryable BOOLEAN NOT NULL DEFAULT false');
+  });
+
+  it('uses no ? placeholders in DDL (placeholders belong to the driver layer)', () => {
+    expect(sqliteSql).not.toContain('?');
+    expect(pgSql).not.toContain('?');
+  });
+
+  it('includes the delivery-id primary key and channel-failure aggregate columns', () => {
+    for (const col of ['delivery_id', 'decision_id', 'event_type', 'processing_result', 'error_code']) {
+      expect(sqliteSql).toContain(col);
+      expect(pgSql).toContain(col);
+    }
+    for (const col of ['channel', 'reason', 'external_ref', 'attempts', 'last_error']) {
+      expect(sqliteSql).toContain(col);
+      expect(pgSql).toContain(col);
+    }
+  });
+});
+
 describe('001_growth_tasks migration (postgres dialect structural check, no live PG)', () => {
   const sqliteSql = readFileSync(migrationFile('sqlite'), 'utf8');
   const pgSql = readFileSync(migrationFile('postgres'), 'utf8');
