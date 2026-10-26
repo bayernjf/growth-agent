@@ -18,6 +18,7 @@
     "migrate:pg:up": "node scripts/migrate.mjs up --driver postgres",
     "migrate:pg:status": "node scripts/migrate.mjs status --driver postgres",
     "check:migrations": "bash scripts/check-migrations.sh",
+    "smoke:offline": "sh scripts/dogfood-smoke.sh",
     "check:all": "npm run check:migrations && npm run typecheck && npm run lint && npm run test && npm run build"
   },
   "dependencies": {
