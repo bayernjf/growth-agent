@@ -41,6 +41,10 @@ export interface AppConfig {
   githubBaseBranch: string;
   /** Shared secret for verifying X-Hub-Signature-256 inbound PR events. */
   githubWebhookSecret?: string | undefined;
+  /** §11.1 JSON map of provider -> micros per unit; malformed fails closed. */
+  costRates?: string | undefined;
+  /** Directory versioned weekly reports are written to (design §5.E). */
+  reportDir: string;
 }
 
 function num(name: string, fallback: number): number {
@@ -81,5 +85,7 @@ export function loadConfig(): AppConfig {
     githubRepo: process.env.GA_GITHUB_REPO || undefined,
     githubBaseBranch: process.env.GA_GITHUB_BASE_BRANCH || 'main',
     githubWebhookSecret: process.env.GA_GITHUB_WEBHOOK_SECRET || undefined,
+    costRates: process.env.GA_COST_RATES || undefined,
+    reportDir: process.env.GA_REPORT_DIR ?? './data/reports',
   };
 }
