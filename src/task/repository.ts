@@ -10,6 +10,7 @@ import type {
   GrowthTaskType,
   PrRef,
   QaResult,
+  VerifyCheck,
   VerifyResult,
 } from './types.js';
 
@@ -24,6 +25,7 @@ interface GrowthTaskRow {
   status: string;
   qa_result: string | null;
   verify_result: string | null;
+  verify_checks: string | null;
   qa_revision_count: number;
   cost_micros_total: number;
   idempotency_key: string;
@@ -33,7 +35,7 @@ interface GrowthTaskRow {
 
 const COLUMNS =
   'id, site_id, task_type, signal_id, zeus_decision_id, loom_content_id, pr_ref,' +
-  ' status, qa_result, verify_result, qa_revision_count, cost_micros_total,' +
+  ' status, qa_result, verify_result, verify_checks, qa_revision_count, cost_micros_total,' +
   ' idempotency_key, created_at, updated_at';
 
 /** Partial mutable fields; the orchestrator writes each as upstream replies arrive. */
@@ -43,6 +45,7 @@ export interface GrowthTaskPatch {
   prRef?: PrRef;
   qaResult?: QaResult;
   verifyResult?: VerifyResult;
+  verifyChecks?: VerifyCheck[];
   costMicrosTotal?: number;
   qaRevisionCount?: number;
 }
@@ -182,6 +185,10 @@ export class GrowthTaskRepository {
       sets.push('verify_result = ?');
       params.push(JSON.stringify(patch.verifyResult));
     }
+    if (patch.verifyChecks !== undefined) {
+      sets.push('verify_checks = ?');
+      params.push(JSON.stringify(patch.verifyChecks));
+    }
     if (patch.costMicrosTotal !== undefined) {
       sets.push('cost_micros_total = ?');
       params.push(patch.costMicrosTotal);
@@ -217,6 +224,7 @@ export class GrowthTaskRepository {
     if (row.pr_ref !== null) task.prRef = JSON.parse(row.pr_ref) as PrRef;
     if (row.qa_result !== null) task.qaResult = JSON.parse(row.qa_result) as QaResult;
     if (row.verify_result !== null) task.verifyResult = JSON.parse(row.verify_result) as VerifyResult;
+    if (row.verify_checks !== null) task.verifyChecks = JSON.parse(row.verify_checks) as VerifyCheck[];
     return task;
   }
 }

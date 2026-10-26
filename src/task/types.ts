@@ -40,6 +40,24 @@ export interface VerifyResult {
   impressionsDelta: number;
   clicksDelta: number;
   positionDelta: number;
+  /**
+   * §5.D outcome (extension beyond the three §3.1 deltas, recorded in the
+   * same JSON column): `verified` = gain observed; `verified_no_gain` = two
+   * consecutive checks with no improvement (also ends the task in done).
+   */
+  outcome?: 'verified' | 'verified_no_gain';
+}
+
+/** §5.D: one next-day recheck record (migration 005 verify_checks). */
+export interface VerifyCheck {
+  at: string;
+  position: number;
+  impressions: number;
+  clicks: number;
+  /** vs baseline: negative positionDelta = moved up in rankings. */
+  positionDelta: number;
+  impressionsDelta: number;
+  clicksDelta: number;
 }
 
 export interface GrowthTask {
@@ -54,6 +72,8 @@ export interface GrowthTask {
   status: GrowthTaskStatus;
   qaResult?: QaResult;
   verifyResult?: VerifyResult;
+  /** §5.D accumulated recheck history (migration 005). */
+  verifyChecks?: VerifyCheck[];
   /** Persisted counter for the §3.2 one-shot qa_revision rework guard. */
   qaRevisionCount: number;
   costMicrosTotal: number;
