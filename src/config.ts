@@ -29,6 +29,18 @@ export interface AppConfig {
   /** DataForSEO HTTP-BASIC credentials (login + password; BYOK). */
   serpLogin?: string | undefined;
   serpPassword?: string | undefined;
+  /** GitHub publisher (T-D2/D3). off = deterministic offline fake publisher. */
+  githubMode: 'off' | 'online';
+  /** PAT with repo scope (least privilege); server-side only, never logged. */
+  githubToken?: string | undefined;
+  /** Default target repository owner/login for openChange. */
+  githubOwner?: string | undefined;
+  /** Default target repository name for openChange. */
+  githubRepo?: string | undefined;
+  /** Base branch PRs are opened against (default main). */
+  githubBaseBranch: string;
+  /** Shared secret for verifying X-Hub-Signature-256 inbound PR events. */
+  githubWebhookSecret?: string | undefined;
 }
 
 function num(name: string, fallback: number): number {
@@ -43,6 +55,7 @@ export function loadConfig(): AppConfig {
   const zeusMode = process.env.GA_ZEUS_MODE === 'online' ? 'online' : 'off';
   const gscMode = process.env.GA_GSC_MODE === 'online' ? 'online' : 'off';
   const serpMode = process.env.GA_SERP_MODE === 'online' ? 'online' : 'off';
+  const githubMode = process.env.GA_GITHUB_MODE === 'online' ? 'online' : 'off';
   return {
     host: process.env.GA_HOST ?? '127.0.0.1',
     port: num('GA_PORT', 8790),
@@ -62,5 +75,11 @@ export function loadConfig(): AppConfig {
     serpMode,
     serpLogin: process.env.GA_SERP_DATAFORSEO_LOGIN || undefined,
     serpPassword: process.env.GA_SERP_DATAFORSEO_PASSWORD || undefined,
+    githubMode,
+    githubToken: process.env.GA_GITHUB_TOKEN || undefined,
+    githubOwner: process.env.GA_GITHUB_OWNER || undefined,
+    githubRepo: process.env.GA_GITHUB_REPO || undefined,
+    githubBaseBranch: process.env.GA_GITHUB_BASE_BRANCH || 'main',
+    githubWebhookSecret: process.env.GA_GITHUB_WEBHOOK_SECRET || undefined,
   };
 }

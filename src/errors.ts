@@ -30,10 +30,14 @@ export type GrowthAgentErrorCode =
   | 'GSC_SITE_FORBIDDEN'
   // Shared upstream-unavailable (§4.1 network/5xx row; reused by SERP).
   | 'UPSTREAM_UNAVAILABLE'
+  // Generic non-retryable upstream HTTP error (e.g. GitHub 4xx not mapped).
+  | 'UPSTREAM_HTTP_ERROR'
   // SERP BYOK provider billing (§4.2: balance exhausted, non-retryable).
   | 'PROVIDER_BILLING'
   // Publisher token / permission failures (§4.3).
   | 'PUBLISH_AUTH'
+  // Publisher token valid but lacks write scope / repo access denied (§4.3, 403).
+  | 'PUBLISH_FORBIDDEN'
   // Encrypted credential store corruption (§8: bad master key, tampered ciphertext).
   | 'CREDENTIAL_STORAGE_INVALID';
 
@@ -104,6 +108,9 @@ export const GrowthAgentErrors = {
   /** Publisher token invalid / missing write scope (§4.3, non-retryable). */
   publishAuth: (message: string, details?: unknown) =>
     new GrowthAgentError('PUBLISH_AUTH', message, 401, false, details),
+  /** Token accepted but write access denied / forbidden (§4.3, 403 non-retryable). */
+  publishForbidden: (message: string, details?: unknown) =>
+    new GrowthAgentError('PUBLISH_FORBIDDEN', message, 403, false, details),
   /** Master key absent at runtime / wrong length / GCM auth-tag failure (§8). */
   credentialStorageInvalid: (message: string, details?: unknown) =>
     new GrowthAgentError('CREDENTIAL_STORAGE_INVALID', message, 500, false, details),
