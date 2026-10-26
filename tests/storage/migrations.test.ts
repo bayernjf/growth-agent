@@ -169,6 +169,89 @@ describe('002_zeus_webhook migration (postgres dialect structural check, no live
   });
 });
 
+describe('004_github_webhook migration (sqlite execution)', () => {
+  it('applies and enforces the (pr_number, action) idempotency key', async () => {
+    const status = await migrationStatus(db);
+    expect(status.applied).toContain('004_github_webhook');
+    expect(status.pending).toEqual([]);
+    const row = [
+      'gh:1:opened',
+      1,
+      'pull_request',
+      'opened',
+      'gt_x',
+      1,
+      'accepted',
+      null,
+      '{"action":"opened"}',
+      '2026-10-26T10:00:00.000Z',
+      '2026-10-26T10:00:00.000Z',
+    ];
+    await db.run(
+      `INSERT INTO github_webhook_deliveries
+         (id, pr_number, event_type, action, task_id, signature_valid,
+          processing_result, error_code, event_payload, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      row,
+    );
+    await expect(
+      db.run(
+        `INSERT INTO github_webhook_deliveries
+           (id, pr_number, event_type, action, task_id, signature_valid,
+            processing_result, error_code, event_payload, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ['gh:1:opened-dup', 1, 'pull_request', 'opened', null, 1, 'accepted', null, '{}', '2026-10-26T10:01:00.000Z', '2026-10-26T10:01:00.000Z'],
+      ),
+    ).rejects.toThrow();
+    // closed-merged and closed-unmerged are distinct ledger actions.
+    await db.run(
+      `INSERT INTO github_webhook_deliveries
+         (id, pr_number, event_type, action, task_id, signature_valid,
+          processing_result, error_code, event_payload, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ['gh:1:closed-merged', 1, 'pull_request', 'closed-merged', 'gt_x', 1, 'accepted', null, '{}', '2026-10-26T10:02:00.000Z', '2026-10-26T10:02:00.000Z'],
+    );
+  });
+});
+
+describe('004_github_webhook migration (postgres dialect structural check, no live PG)', () => {
+  const sqliteSql = readFileSync(
+    join(repoRoot, 'db', 'migrations', 'sqlite', '004_github_webhook.sql'),
+    'utf8',
+  );
+  const pgSql = readFileSync(
+    join(repoRoot, 'db', 'migrations', 'postgres', '004_github_webhook.sql'),
+    'utf8',
+  );
+
+  it('creates github_webhook_deliveries in both dialects', () => {
+    expect(sqliteSql).toContain('CREATE TABLE IF NOT EXISTS github_webhook_deliveries');
+    expect(pgSql).toContain('CREATE TABLE IF NOT EXISTS github_webhook_deliveries');
+  });
+
+  it('stores the event payload as TEXT on sqlite and JSONB on postgres', () => {
+    expect(sqliteSql).toContain('event_payload TEXT');
+    expect(pgSql).toContain('event_payload JSONB');
+  });
+
+  it('declares signature_valid as INTEGER on sqlite and BOOLEAN on postgres', () => {
+    expect(sqliteSql).toContain('signature_valid INTEGER NOT NULL DEFAULT 1');
+    expect(pgSql).toContain('signature_valid BOOLEAN NOT NULL DEFAULT true');
+  });
+
+  it('deduplicates with a unique (pr_number, action) index in both dialects', () => {
+    expect(sqliteSql).toContain('uq_github_delivery_action');
+    expect(pgSql).toContain('uq_github_delivery_action');
+    expect(sqliteSql).toContain('ON github_webhook_deliveries(pr_number, action)');
+    expect(pgSql).toContain('ON github_webhook_deliveries(pr_number, action)');
+  });
+
+  it('uses no ? placeholders in DDL', () => {
+    expect(sqliteSql).not.toContain('?');
+    expect(pgSql).not.toContain('?');
+  });
+});
+
 describe('001_growth_tasks migration (postgres dialect structural check, no live PG)', () => {
   const sqliteSql = readFileSync(migrationFile('sqlite'), 'utf8');
   const pgSql = readFileSync(migrationFile('postgres'), 'utf8');
