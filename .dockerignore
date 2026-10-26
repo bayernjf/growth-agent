@@ -1,0 +1,12 @@
+node_modules
+dist
+data
+.env
+.env.local
+.git
+.gitignore
+*.log
+coverage
+tests/**/*.test.ts
+.vscode
+.DS_Store

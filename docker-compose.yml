@@ -1,0 +1,153 @@
+# growth-agent self-hosted stack (design §7). Single-host docker compose,
+# modelled on loom/infra/docker-compose.yml. Data ports bind to loopback
+# only; the orchestrator is the sole service publishing a host port.
+#
+# Default storage is SQLite (zero external dependencies, image default).
+# Postgres is included for the GA_DB_DRIVER=postgres deployment path:
+# switching requires a pg-enabled image (the repo's zero-dependency rule
+# keeps `pg` out of package.json; see deploy/SELF_HOSTING.md).
+#
+# Peer services (growth-os) that have no published image are under the
+# `peers` profile: bring them up with `--profile peers` once you have set
+# GROWTH_OS_IMAGE. No kernel repository is modified by this file.
+x-logging: &default-logging
+  driver: json-file
+  options: {max-size: "10m", max-file: "3"}
+
+services:
+  orchestrator:
+    build: .
+    image: growth-agent:local
+    env_file:
+      - {path: .env, required: false}
+    environment:
+      GA_HOST: 0.0.0.0
+      GA_PORT: 8790
+      # SQLite is the default; set GA_DB_DRIVER=postgres to use DATABASE_URL.
+      GA_DB_DRIVER: ${GA_DB_DRIVER:-sqlite}
+      GA_SQLITE_PATH: /data/growth-agent.db
+      DATABASE_URL: postgres://${POSTGRES_USER:-growth}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-growth_agent}
+      GA_GSC_TOKEN_DIR: /data/gsc-tokens
+      GA_REPORT_DIR: /data/reports
+      GA_ZEUS_URL: http://zeus:8787
+      GA_ZEUS_CALLBACK_URL: http://orchestrator:8790/webhooks/zeus
+    volumes:
+      - agent_data:/data
+      - gsc_tokens:/data/gsc-tokens
+      - reports:/data/reports
+    ports:
+      - "127.0.0.1:8790:8790"
+    depends_on:
+      postgres: {condition: service_healthy}
+      zeus: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8790/healthz').then(r=>{if(r.status!==200)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+    logging: *default-logging
+
+  zeus:
+    # Decision kernel: build from the sibling repository (no image published).
+    build: {context: ../zeus}
+    image: zeus:local
+    environment:
+      ZEUS_HOST: 0.0.0.0
+      ZEUS_PORT: 8787
+      ZEUS_INTERNAL_TOKEN: ${ZEUS_INTERNAL_TOKEN}
+      # Roster signing key: generate once (see zeus docs/deployment.md) and
+      # persist in the zeusdata volume; the kernel refuses to boot without it.
+      ZEUS_RSK_KEY_FILE: /data/rsk.key
+      ZEUS_RSK_KEY_ID: ${ZEUS_RSK_KEY_ID:-local-rsk}
+      ZEUS_STATE_FILE: /data/kernel-state.json
+    volumes:
+      - zeusdata:/data
+    expose: ["8787"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+    logging: *default-logging
+
+  growth-os:
+    # No image is published by growth-os and its kernel must not be modified
+    # here; build it out-of-tree and set GROWTH_OS_IMAGE (or tag it
+    # growth-os:local). Activated only under the `peers` profile.
+    image: ${GROWTH_OS_IMAGE:-growth-os:local}
+    profiles: ["peers"]
+    environment:
+      GROWTH_ZEUS_MODE: online
+      GROWTH_ZEUS_BASE_URL: http://zeus:8787
+      GROWTH_ZEUS_TOKEN: ${ZEUS_INTERNAL_TOKEN}
+      GROWTH_SEARCH_MODE: ${GROWTH_SEARCH_MODE:-off}
+    expose: ["8788"]
+    depends_on:
+      zeus: {condition: service_healthy}
+    restart: unless-stopped
+    logging: *default-logging
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-growth}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-growth_agent}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-growth} -d ${POSTGRES_DB:-growth_agent}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+    logging: *default-logging
+
+  redis:
+    # Reserved for future distributed scheduling locks; the v1 daily
+    # scheduler is in-process and does not connect to Redis yet.
+    image: redis:7
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+    logging: *default-logging
+
+  db-backup:
+    image: pgvector/pgvector:pg16
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER:-growth}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB:-growth_agent}
+      RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-7}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+    volumes:
+      - ./deploy/pg-backup.sh:/scripts/pg-backup.sh:ro
+      - backups:/backups
+    entrypoint: ["/bin/sh", "/scripts/pg-backup.sh"]
+    depends_on:
+      postgres: {condition: service_healthy}
+    restart: unless-stopped
+    logging: *default-logging
+
+volumes:
+  agent_data:
+  gsc_tokens:
+  reports:
+  pgdata:
+  redisdata:
+  zeusdata:
+  backups:
