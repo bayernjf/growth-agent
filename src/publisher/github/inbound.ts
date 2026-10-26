@@ -183,7 +183,25 @@ export async function handleInboundGithubEvent(
 
   const action = normalizeAction(event);
   const prNumber = event.pull_request.number;
-  const id = githubDeliveryId(prNumber, action);
+
+  // Audit-only actions: no state edge in §3.2 (new PR commits, reviews, ...).
+  // They are repeatable per PR, so the ledger id carries the push head SHA
+  // (or the GitHub delivery GUID); lifecycle actions keep a deterministic id.
+  const auditOnly = action === 'synchronize' || action === 'edited' || action === 'assigned'
+    || action === 'review_requested' || action === 'labeled' || action === 'unlabeled';
+  let id: string;
+  if (auditOnly) {
+    const repeatKey = event.pull_request.head.sha ?? headers.delivery;
+    if (repeatKey === null || repeatKey === '') {
+      return {
+        status: 400,
+        body: failureBody('BAD_EVENT', 'repeatable audit events need a head SHA or delivery id', false),
+      };
+    }
+    id = githubDeliveryId(prNumber, action, repeatKey);
+  } else {
+    id = githubDeliveryId(prNumber, action);
+  }
 
   const existing = await deps.deliveries.find(id);
   if (existing !== undefined) {
@@ -195,9 +213,7 @@ export async function handleInboundGithubEvent(
 
   const now = deps.now();
 
-  // Audit-only actions: no state edge in §3.2 (new PR commits, reviews, etc.).
-  const auditOnly = action === 'synchronize' || action === 'edited' || action === 'assigned'
-    || action === 'review_requested' || action === 'labeled' || action === 'unlabeled';
+  // Audit-only actions: record and acknowledge (no state edge).
   if (auditOnly) {
     await deps.deliveries.record({
       id,

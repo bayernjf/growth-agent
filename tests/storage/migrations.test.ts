@@ -169,10 +169,11 @@ describe('002_zeus_webhook migration (postgres dialect structural check, no live
   });
 });
 
-describe('004_github_webhook migration (sqlite execution)', () => {
-  it('applies and enforces the (pr_number, action) idempotency key', async () => {
+describe('004/006 github webhook ledger (sqlite execution)', () => {
+  it('dedupes lifecycle actions by deterministic primary key id', async () => {
     const status = await migrationStatus(db);
     expect(status.applied).toContain('004_github_webhook');
+    expect(status.applied).toContain('006_github_ledger_repeatable');
     expect(status.pending).toEqual([]);
     const row = [
       'gh:1:opened',
@@ -194,13 +195,14 @@ describe('004_github_webhook migration (sqlite execution)', () => {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       row,
     );
+    // Redelivery of the same lifecycle event keeps the same deterministic id.
     await expect(
       db.run(
         `INSERT INTO github_webhook_deliveries
            (id, pr_number, event_type, action, task_id, signature_valid,
             processing_result, error_code, event_payload, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ['gh:1:opened-dup', 1, 'pull_request', 'opened', null, 1, 'accepted', null, '{}', '2026-10-26T10:01:00.000Z', '2026-10-26T10:01:00.000Z'],
+        ['gh:1:opened', 1, 'pull_request', 'opened', null, 1, 'accepted', null, '{}', '2026-10-26T10:01:00.000Z', '2026-10-26T10:01:00.000Z'],
       ),
     ).rejects.toThrow();
     // closed-merged and closed-unmerged are distinct ledger actions.
@@ -211,6 +213,22 @@ describe('004_github_webhook migration (sqlite execution)', () => {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ['gh:1:closed-merged', 1, 'pull_request', 'closed-merged', 'gt_x', 1, 'accepted', null, '{}', '2026-10-26T10:02:00.000Z', '2026-10-26T10:02:00.000Z'],
     );
+  });
+
+  it('006 allows multiple synchronize rows per PR (human edit pushes)', async () => {
+    for (const sha of ['aaa111', 'bbb222', 'ccc333']) {
+      await db.run(
+        `INSERT INTO github_webhook_deliveries
+           (id, pr_number, event_type, action, task_id, signature_valid,
+            processing_result, error_code, event_payload, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [`gh:9:synchronize:${sha}`, 9, 'pull_request', 'synchronize', 'gt_x', 1, 'ignored', null, '{}', '2026-10-26T10:03:00.000Z', '2026-10-26T10:03:00.000Z'],
+      );
+    }
+    const rows = await db.all<{ id: string }>(
+      `SELECT id FROM github_webhook_deliveries WHERE pr_number = 9 AND action = 'synchronize'`,
+    );
+    expect(rows).toHaveLength(3);
   });
 });
 
@@ -249,6 +267,29 @@ describe('004_github_webhook migration (postgres dialect structural check, no li
   it('uses no ? placeholders in DDL', () => {
     expect(sqliteSql).not.toContain('?');
     expect(pgSql).not.toContain('?');
+  });
+});
+
+describe('006_github_ledger_repeatable migration (structural check, no live PG)', () => {
+  const sqliteSql = readFileSync(
+    join(repoRoot, 'db', 'migrations', 'sqlite', '006_github_ledger_repeatable.sql'),
+    'utf8',
+  );
+  const pgSql = readFileSync(
+    join(repoRoot, 'db', 'migrations', 'postgres', '006_github_ledger_repeatable.sql'),
+    'utf8',
+  );
+
+  it('removes the composite unique index in both dialects', () => {
+    expect(pgSql).toContain('DROP INDEX IF EXISTS uq_github_delivery_action');
+    expect(sqliteSql).toContain('DROP INDEX IF EXISTS uq_github_delivery_action');
+  });
+
+  it('keeps a non-unique pr_number index for lookups in both dialects', () => {
+    expect(sqliteSql).toContain('idx_github_delivery_pr');
+    expect(pgSql).toContain('idx_github_delivery_pr');
+    expect(sqliteSql).not.toContain('CREATE UNIQUE INDEX IF NOT EXISTS');
+    expect(pgSql).not.toContain('CREATE UNIQUE INDEX IF NOT EXISTS');
   });
 });
 

@@ -37,8 +37,17 @@ interface DeliveryDbRow {
 }
 
 /** Deterministic idempotency key for one (PR number, action) delivery. */
-export function githubDeliveryId(prNumber: number, action: string): string {
-  return `gh:${prNumber}:${action}`;
+/**
+ * Deterministic ledger id. Lifecycle actions (opened, closed-merged, ...)
+ * are unique per (PR, action); repeatable audit actions (synchronize,
+ * edited, ...) append a per-event key — the push head SHA, falling back to
+ * the GitHub delivery GUID — so redelivery dedupes while genuine pushes
+ * are recorded individually (PRD §8.1 indicator 3).
+ */
+export function githubDeliveryId(prNumber: number, action: string, repeatKey?: string): string {
+  return repeatKey !== undefined
+    ? `gh:${prNumber}:${action}:${repeatKey}`
+    : `gh:${prNumber}:${action}`;
 }
 
 export class GithubWebhookRepository {

@@ -253,6 +253,32 @@ describe('inbound github pull_request webhook (T-D3)', () => {
     const syncJson = (await sync.json()) as { auditOnly?: boolean };
     expect(syncJson.auditOnly).toBe(true);
     expect((await tasks.get('gt_sync'))?.status).toBe('awaiting_merge');
+
+    // A second human push (new head SHA, new delivery GUID) is a distinct
+    // ledger row; redelivery of the same GUID is deduped (PRD §8.1 #3).
+    const syncBody2 = JSON.stringify(
+      makeEvent({
+        action: 'synchronize',
+        pull_request: {
+          ...makeEvent({}).pull_request,
+          number: 55,
+          head: { ref: 'growth-agent/gt_sync', sha: 'push-2' },
+        },
+      }),
+    );
+    const sync2 = await pushRaw(app, {
+      body: syncBody2,
+      signature: signGithubBody(SECRET, syncBody2),
+      delivery: 'guid-55-sync-2',
+    });
+    expect(sync2.status).toBe(200);
+    expect(await deliveries.find(githubDeliveryId(55, 'synchronize', 'push-2'))).toBeDefined();
+    const dup = await pushRaw(app, {
+      body: syncBody2,
+      signature: signGithubBody(SECRET, syncBody2),
+      delivery: 'guid-55-sync-2',
+    });
+    expect((await dup.json()).duplicate).toBe(true);
   });
 
   it('returns 503 when no secret is configured', async () => {
