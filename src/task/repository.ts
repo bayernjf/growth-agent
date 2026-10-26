@@ -107,6 +107,35 @@ export class GrowthTaskRepository {
     return row ? this.map(row) : undefined;
   }
 
+  /**
+   * Resolve the local task linked to a GitHub PR number (§6.1 inbound
+   * writeback). pr_ref is stored as JSON with dialect-specific extraction
+   * syntax; the task volume is tiny (one write + one fix per day hard cap),
+   * so lifecycle rows are read and filtered in JS instead of embedding
+   * sqlite json_extract / postgres ->> differences in the SQL.
+   */
+  async findByPrNumber(prNumber: number): Promise<GrowthTask | undefined> {
+    const statuses: GrowthTaskStatus[] = [
+      'pr_opened',
+      'awaiting_merge',
+      'merged',
+      'verifying',
+      'cancelled',
+    ];
+    for (const status of statuses) {
+      const rows = await this.driver.all<GrowthTaskRow>(
+        `SELECT ${COLUMNS} FROM growth_tasks WHERE status = ? ORDER BY updated_at DESC`,
+        [status],
+      );
+      for (const row of rows) {
+        if (row.pr_ref === null) continue;
+        const parsed = JSON.parse(row.pr_ref) as Partial<PrRef>;
+        if (parsed.number === prNumber) return this.map(row);
+      }
+    }
+    return undefined;
+  }
+
   async list(status?: GrowthTaskStatus): Promise<GrowthTask[]> {
     const rows =
       status === undefined

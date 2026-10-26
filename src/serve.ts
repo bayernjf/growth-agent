@@ -5,6 +5,7 @@ import { serve } from '@hono/node-server';
 import { loadConfig } from './config.js';
 import { createHealthApp } from './api/health.js';
 import { createZeusWebhookApp } from './api/webhooks/zeus.js';
+import { createGithubWebhookApp } from './api/webhooks/github.js';
 import { PostgresDriver } from './storage/postgres/postgres-driver.js';
 import { migrateUp } from './storage/migrate.js';
 import type { StorageDriver } from './storage/driver.js';
@@ -14,6 +15,7 @@ import {
   ChannelFailureRepository,
   WebhookDeliveryRepository,
 } from './connector/zeus/webhook-repository.js';
+import { GithubWebhookRepository } from './publisher/github/webhook-repository.js';
 
 async function createDriver(): Promise<StorageDriver> {
   const config = loadConfig();
@@ -43,6 +45,14 @@ async function main(): Promise<void> {
       'GA_ZEUS_MODE=online requires GA_ZEUS_WEBHOOK_SECRET (>=16 chars) to verify inbound zeus webhooks',
     );
   }
+  // Inbound GitHub PR events must be verified: an online publisher deployment
+  // without the webhook secret must refuse to start rather than accept
+  // unsigned lifecycle events.
+  if (config.githubMode === 'online' && (config.githubWebhookSecret ?? '').length < 16) {
+    throw new Error(
+      'GA_GITHUB_MODE=online requires GA_GITHUB_WEBHOOK_SECRET (>=16 chars) to verify inbound GitHub webhooks',
+    );
+  }
   const driver = await createDriver();
   await migrateUp(driver);
 
@@ -53,6 +63,16 @@ async function main(): Promise<void> {
     createZeusWebhookApp({
       secret: config.zeusWebhookSecret ?? '',
       deliveries: new WebhookDeliveryRepository(driver),
+      failures: new ChannelFailureRepository(driver),
+      tasks: new GrowthTaskRepository(driver),
+      now: () => new Date().toISOString(),
+    }),
+  );
+  app.route(
+    '/webhooks/github',
+    createGithubWebhookApp({
+      secret: config.githubWebhookSecret ?? '',
+      deliveries: new GithubWebhookRepository(driver),
       failures: new ChannelFailureRepository(driver),
       tasks: new GrowthTaskRepository(driver),
       now: () => new Date().toISOString(),
