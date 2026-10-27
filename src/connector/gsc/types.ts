@@ -49,8 +49,7 @@ export interface GscReadonlyProvider {
  * Map a Google Webmasters HTTP failure to the §4.1 error table.
  * Google returns a JSON error envelope `{ error: { code, message, status } }`;
  * the numeric code is the authoritative classifier, HTTP status only a hint.
- * NOTE: the real online transport (T-B4) is not exercised in this wave; this
- * mapper is the contract the T-B4 adapter must call.
+ * Called by the T-B4 online transport (online.ts) on every non-2xx response.
  */
 export function mapGscHttpError(status: number, rawBody: unknown): GrowthAgentError {
   const body = (rawBody ?? {}) as {

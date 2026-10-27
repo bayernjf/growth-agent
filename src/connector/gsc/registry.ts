@@ -1,7 +1,7 @@
 // GSC provider registry. Mirrors growth-os provider registry + zeus registry:
 //   - off (default)  -> deterministic OfflineGscProvider (zero network).
-//   - online + client id/secret + master key -> OnlineGscClient (placeholder
-//     this wave; real transport is T-B4).
+//   - online + client id/secret + master key -> OnlineGscClient (real
+//     searchAnalytics transport, T-B4).
 //   - online without full OAuth config -> RejectingGscProvider (422 on any
 //     call); never silently downgraded to the offline fixture.
 
