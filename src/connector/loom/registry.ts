@@ -1,18 +1,29 @@
-// Loom client registry (T-E4). Only the mock exists this wave: there is no
-// HTTP adapter until the openapi shapes are reconciled (paths/fields marked
-// 待 openapi 对照 in types.ts). Selecting an online mode therefore fails
-// closed rather than silently returning mock content.
+// Loom client registry (SERP/zeus discipline):
+//   off (default)  -> deterministic MockLoomClient, zero network.
+//   online + url + tenant -> HttpLoomClient speaking the reconciled loom
+//     FastAPI wire contract (tests run it against an injected fake fetch).
+//   online without url/tenant -> RejectingLoomClient (422 on every call);
+//     never silently downgraded to the offline mock.
 
-import { GrowthAgentErrors } from '../../errors.js';
-import { MockLoomClient, type MockLoomState } from './mock.js';
+import type { AppConfig } from '../../config.js';
+import { HttpLoomClient } from './http.js';
+import { MockLoomClient } from './mock.js';
+import { RejectingLoomClient } from './rejecting.js';
 import type { LoomClient } from './types.js';
 
-export function createLoomClient(mode: 'mock' | 'online' = 'mock', state?: MockLoomState): LoomClient {
-  if (mode === 'online') {
-    // Real adapter is explicitly out of scope until openapi reconciliation.
-    throw GrowthAgentErrors.credentialMissing(
-      'loom online adapter is not implemented (T-E4 mock only; openapi reconciliation pending)',
-    );
+export function createLoomClient(config: AppConfig): LoomClient {
+  if (config.loomMode === 'online') {
+    if (!config.loomUrl || !config.loomTenantId) {
+      return new RejectingLoomClient(
+        'GA_LOOM_MODE=online requires GA_LOOM_URL and GA_LOOM_TENANT_ID (fail-closed; never offline mock)',
+      );
+    }
+    return new HttpLoomClient({
+      baseUrl: config.loomUrl,
+      tenantId: config.loomTenantId,
+      token: config.loomToken,
+      language: config.loomLanguage,
+    });
   }
-  return new MockLoomClient(state);
+  return new MockLoomClient();
 }

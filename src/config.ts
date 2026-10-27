@@ -29,6 +29,16 @@ export interface AppConfig {
   /** DataForSEO HTTP-BASIC credentials (login + password; BYOK). */
   serpLogin?: string | undefined;
   serpPassword?: string | undefined;
+  /** Loom content pipeline adapter (T-E4, openapi-reconciled). off = mock. */
+  loomMode: 'off' | 'online';
+  /** Self-hosted loom base URL (required when online). */
+  loomUrl?: string | undefined;
+  /** Loom tenant id; required by the GET /api/content/{id} wire contract. */
+  loomTenantId?: string | undefined;
+  /** Optional Bearer token; only required when loom staff_auth gate is on. */
+  loomToken?: string | undefined;
+  /** Wire language sent on generate (default 'en'). */
+  loomLanguage?: string | undefined;
   /** GitHub publisher (T-D2/D3). off = deterministic offline fake publisher. */
   githubMode: 'off' | 'online';
   /** PAT with repo scope (least privilege); server-side only, never logged. */
@@ -60,6 +70,7 @@ export function loadConfig(): AppConfig {
   const gscMode = process.env.GA_GSC_MODE === 'online' ? 'online' : 'off';
   const serpMode = process.env.GA_SERP_MODE === 'online' ? 'online' : 'off';
   const githubMode = process.env.GA_GITHUB_MODE === 'online' ? 'online' : 'off';
+  const loomMode = process.env.GA_LOOM_MODE === 'online' ? 'online' : 'off';
   return {
     host: process.env.GA_HOST ?? '127.0.0.1',
     port: num('GA_PORT', 8790),
@@ -79,6 +90,11 @@ export function loadConfig(): AppConfig {
     serpMode,
     serpLogin: process.env.GA_SERP_DATAFORSEO_LOGIN || undefined,
     serpPassword: process.env.GA_SERP_DATAFORSEO_PASSWORD || undefined,
+    loomMode,
+    loomUrl: process.env.GA_LOOM_URL || undefined,
+    loomTenantId: process.env.GA_LOOM_TENANT_ID || undefined,
+    loomToken: process.env.GA_LOOM_TOKEN || undefined,
+    loomLanguage: process.env.GA_LOOM_LANGUAGE || undefined,
     githubMode,
     githubToken: process.env.GA_GITHUB_TOKEN || undefined,
     githubOwner: process.env.GA_GITHUB_OWNER || undefined,

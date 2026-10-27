@@ -1,72 +1,105 @@
-// Loom content pipeline client port (T-E4).
+// Loom content pipeline client port (T-E4; openapi-reconciled).
 //
-// IMPORTANT — openapi reconciliation: loom exposes ~219 paths and its
-// real request/response shapes MUST be verified against the loom openapi
-// spec before any online adapter is built. The shapes below mirror the
-// documented intent (topic draft submission -> final_id -> review console
-// state) but are explicitly marked 待 openapi 对照. This wave ships the
-// port plus a deterministic mock only; there is deliberately no HTTP
-// adapter and no real loom call.
+// WIRE CONTRACT — verified against the loom FastAPI sources read-only
+// (backend/app/content/router.py, schemas.py, service.generate_content,
+// statemachine.py, core/staff_auth/deps.py). No loom runtime is needed to
+// test this adapter; the shapes below mirror the real request/response
+// envelope exactly.
+//
+//   POST /api/content/generate                        -> 201 ContentProductView
+//     body { final_id, kind='article', language,
+//             actor: { id, roles: ['operations'] } }
+//     errors: 403 actor lacks operations role / staff gate on
+//             404 final_id not issued (ContentFcwNotFound)
+//             409 FCW revoked / duplicate final+lang+kind / generation state
+//             422 unknown kind / language not eligible
+//             502 generation output invalid
+//   GET  /api/content/{content_id}?tenant_id=<required> -> 200 ContentProductView
+//     errors: 404 content not found (tenant mismatch -> 404 as well)
+//   status enum: draft | generating | review | ready_for_publish
+//               | rejected | revising | discarded
+//   error envelope: FastAPI {"detail": "..."} (422 detail is a list).
+//   auth: default deployment has no gate; when staff_auth_enabled the caller
+//         must send `Authorization: Bearer <staff-token>` (401 otherwise).
+//
+// KNOWN GAPS (operator workflow, deliberately NOT bridged by this adapter):
+//   - loom issues final_id out-of-band via POST /api/fcw/assemble, which
+//     requires product_space_id + platform + slot_id + goal. growth-agent has
+//     no model for those, so submitTopicDraft takes a pre-issued finalId.
+//   - approve/reject/revise are the human review console: growth-agent never
+//     calls them; D2 human approval stays with the human.
+//   - the 13-segment chain runs async (generating -> review); polling cadence
+//     belongs to the scheduler, not this port.
+
+/** Loom content lifecycle states (wire `status`, verbatim). */
+export type LoomContentStatus =
+  | 'draft'
+  | 'generating'
+  | 'review'
+  | 'ready_for_publish'
+  | 'rejected'
+  | 'revising'
+  | 'discarded';
 
 /**
- * Submitted topic draft.
- * 待 openapi 对照: real field names/path (draft submission endpoint).
+ * Topic draft submission. Only taskId/finalId/language travel on the wire;
+ * query/angle/siteId/evidenceSignalIds are local audit fields the loom wire
+ * contract does not accept (documented, never fabricated into the request).
  */
 export interface LoomTopicDraftInput {
-  /** GrowthTask id that requested this content; carried as idempotency key. */
+  /** GrowthTask id; wire: actor.id (audit / idempotency trace). */
   taskId: string;
-  /** The target query (article intent). */
+  /** Pre-issued FCW final_id (loom side, out-of-band). Wire: final_id. */
+  finalId: string;
+  /** Local audit record only; NOT sent over the loom wire. */
   query: string;
-  /** Selected angle / outline hint from the QA intent gate. */
+  /** Local audit record only; NOT sent over the loom wire. */
   angle: string;
-  /** Target site id; loom must know which adapter/project this is for. */
+  /** Local audit record only; NOT sent over the loom wire. */
   siteId: string;
-  /** Growth evidence to render in the loom review card. */
+  /** Local audit record only; NOT sent over the loom wire. */
   evidenceSignalIds: string[];
+  /** Wire: language; default GA_LOOM_LANGUAGE or 'en' when unset. */
+  language?: string | undefined;
 }
 
-/**
- * Accepted draft response.
- * 待 openapi 对照: loom may return a draft id or a content id directly.
- */
+/** Accepted draft response (POST /api/content/generate -> ContentProductView). */
 export interface LoomTopicDraftRef {
-  /** In-process loom id for the accepted draft. */
-  draftId: string;
-  /** 待 openapi 对照: final_id is the only exit id; may arrive later. */
-  finalId?: string;
-  status: LoomContentStatus;
-}
-
-/**
- * Loom review-console states.
- * 待 openapi 对照: exact enum names.
- */
-export type LoomContentStatus =
-  | 'drafting'
-  | 'awaiting_review'
-  | 'approved'
-  | 'changes_requested'
-  | 'rejected'
-  | 'published';
-
-/** Full content record once the 13-segment chain finishes. */
-export interface LoomContent {
+  /** Wire: content_id — the polling handle for getContent/getReviewStatus. */
+  contentId: string;
+  /** Wire: final_id echo. */
   finalId: string;
   status: LoomContentStatus;
-  /** Relative CMS path when approved (the page slug). */
-  path?: string;
-  title?: string;
-  /** Assembled paragraphs; the production batch turns these into PR files. */
-  paragraphs?: string[];
+}
+
+/**
+ * Full content record (GET /api/content/{content_id} -> ContentProductView).
+ * `body` is the single assembled article string (wire: body); the wire has no
+ * paragraphs array and no separate title field — goal carries the article goal.
+ */
+export interface LoomContent {
+  contentId: string;
+  finalId: string;
+  status: LoomContentStatus;
+  /** Wire: goal (frozen article goal from the FCW). */
+  goal: string;
+  /** Wire: platform. */
+  platform: string;
+  /** Wire: body — assembled article text; null while generating. */
+  body: string | null;
+  /** Wire: published_url; non-null once ops backfill the published link. */
+  publishedUrl: string | null;
+  /** Wire: quality_score; advisory only (never auto-approves). */
+  qualityScore: number | null;
 }
 
 export interface LoomClient {
   readonly name: string;
   readonly mode: 'mock' | 'online';
-  /** Submit a topic draft (idempotent on taskId). */
+  /** Kick off the 13-segment chain for a pre-issued finalId. */
   submitTopicDraft(input: LoomTopicDraftInput): Promise<LoomTopicDraftRef>;
-  /** Fetch the content by final id (polled during the drafting wait). */
-  getContent(finalId: string): Promise<LoomContent>;
-  /** Review-console status short read. */
-  getReviewStatus(finalId: string): Promise<LoomContentStatus>;
+  /** Fetch the content by content id (wire: path content_id, tenant_id query). */
+  getContent(contentId: string): Promise<LoomContent>;
+  /** Review-console status short read (wire: status field of the same view). */
+  getReviewStatus(contentId: string): Promise<LoomContentStatus>;
 }

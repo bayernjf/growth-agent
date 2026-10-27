@@ -20,7 +20,7 @@ import type { StorageDriver } from '../storage/driver.js';
 import type { AppConfig } from '../config.js';
 import { GrowthAgentErrors } from '../errors.js';
 
-export type ConnectorName = 'zeus' | 'gsc' | 'serp' | 'github';
+export type ConnectorName = 'zeus' | 'gsc' | 'serp' | 'loom' | 'github';
 
 export interface CredentialPresence {
   connector: ConnectorName;
@@ -64,6 +64,15 @@ export function checkCredentialPresence(config: AppConfig): CredentialPresence[]
     out.push({ connector: 'serp', checked: true, ok: missing.length === 0, missing });
   } else {
     out.push({ connector: 'serp', checked: false, ok: true, missing: [] });
+  }
+
+  if (config.loomMode === 'online') {
+    const missing: string[] = [];
+    if (!config.loomUrl) missing.push('GA_LOOM_URL');
+    if (!config.loomTenantId) missing.push('GA_LOOM_TENANT_ID');
+    out.push({ connector: 'loom', checked: true, ok: missing.length === 0, missing });
+  } else {
+    out.push({ connector: 'loom', checked: false, ok: true, missing: [] });
   }
 
   if (config.githubMode === 'online') {
