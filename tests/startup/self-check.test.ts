@@ -27,6 +27,8 @@ const offlineConfig: AppConfig = {
   gscTokenDir: '/tmp/tokens',
   serpMode: 'off',
   loomMode: 'off',
+  draftMode: 'inbox',
+  draftInboxDir: '/tmp/drafts',
   githubMode: 'off',
   githubBaseBranch: 'main',
   reportDir: '/tmp/reports',

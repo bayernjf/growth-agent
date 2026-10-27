@@ -69,7 +69,7 @@ describe('GSC registry discipline (§4.1 / growth-os provider pattern)', () => {
     ).rejects.toMatchObject({ code: 'GSC_CREDENTIAL_MISSING' });
   });
 
-  it('online fully configured constructs the placeholder (calls are T-B4, not 422, not offline)', async () => {
+  it('online fully configured constructs the real transport (not 422, not offline)', async () => {
     const config = withEnv({
       GA_GSC_MODE: 'online',
       GA_GSC_CLIENT_ID: 'cid',
@@ -79,8 +79,11 @@ describe('GSC registry discipline (§4.1 / growth-os provider pattern)', () => {
     });
     const provider = createGscReadonlyProvider(config);
     expect(provider.name).toBe('gsc-http');
+    expect(provider.mode).toBe('online');
+    // No sealed refresh token yet: the operator has not run the OAuth
+    // handshake, which must be reported distinctly from a transport fault.
     await expect(provider.listSites()).rejects.toMatchObject({
-      code: 'UPSTREAM_UNAVAILABLE',
+      code: 'GSC_AUTH_REVOKED',
     });
   });
 
