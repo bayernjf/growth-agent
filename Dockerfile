@@ -23,6 +23,10 @@ RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=builder --chown=node:node /app/dist ./dist
 # Paired migrations are read at runtime from db/migrations (src/storage/migrate.ts).
 COPY --chown=node:node db ./db
+# Site configs are read at runtime by the batch CLI (dist/cli/batch.js) and by
+# the offline smoke; a compose bind mount over /app/config/sites overrides
+# these so an operator can add a site without rebuilding the image.
+COPY --chown=node:node config ./config
 # Offline connector modes replay these deterministic fixtures (the default
 # GA_*_MODE=off deployment still runs the full pipeline without network).
 COPY --chown=node:node tests/fixtures ./tests/fixtures

@@ -49,6 +49,47 @@ services:
     restart: unless-stopped
     logging: *default-logging
 
+  batch:
+    # Scheduler sidecar. The orchestrator process only serves healthz and the
+    # two inbound webhooks, so without this nothing would ever run the daily,
+    # production or verification batch. Same sleep-loop pattern as db-backup:
+    # the image has no cron daemon.
+    #
+    # NOTE: with GA_DB_DRIVER=sqlite this process and the orchestrator share
+    # one database file. Writes are infrequent (webhook arrivals vs hourly
+    # ticks) but not impossible to collide, and no SQLITE_BUSY retry exists;
+    # use the postgres service for a deployment that runs both under load.
+    image: growth-agent:local
+    env_file:
+      - {path: .env, required: false}
+    environment:
+      GA_DB_DRIVER: ${GA_DB_DRIVER:-sqlite}
+      GA_SQLITE_PATH: /data/growth-agent.db
+      DATABASE_URL: postgres://${POSTGRES_USER:-growth}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-growth_agent}
+      GA_GSC_TOKEN_DIR: /data/gsc-tokens
+      GA_REPORT_DIR: /data/reports
+      # Operator draft inbox: one <taskId>.json per approved task (see
+      # .env.example). On the /data volume so drafts survive a rebuild.
+      GA_DRAFT_INBOX_DIR: /data/drafts
+      GA_ZEUS_URL: http://zeus:8787
+      BATCH_SITE: ${BATCH_SITE:-bayjf.com}
+      BATCH_INTERVAL_SECONDS: ${BATCH_INTERVAL_SECONDS:-3600}
+      BATCH_DAILY_HOUR_UTC: ${BATCH_DAILY_HOUR_UTC:-6}
+    volumes:
+      - agent_data:/data
+      - gsc_tokens:/data/gsc-tokens
+      - reports:/data/reports
+      - ./deploy/batch-scheduler.sh:/scripts/batch-scheduler.sh:ro
+      # Overrides the config/sites baked into the image, so adding a site does
+      # not require a rebuild.
+      - ./config/sites:/app/config/sites:ro
+    entrypoint: ["/bin/sh", "/scripts/batch-scheduler.sh"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      zeus: {condition: service_healthy}
+    restart: unless-stopped
+    logging: *default-logging
+
   zeus:
     # Decision kernel: build from the sibling repository (no image published).
     build: {context: ../zeus}
