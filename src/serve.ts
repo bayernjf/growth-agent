@@ -1,15 +1,12 @@
-import { existsSync, mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { existsSync } from 'node:fs';
 import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 import { loadConfig } from './config.js';
 import { createHealthApp } from './api/health.js';
 import { createZeusWebhookApp } from './api/webhooks/zeus.js';
 import { createGithubWebhookApp } from './api/webhooks/github.js';
-import { PostgresDriver } from './storage/postgres/postgres-driver.js';
 import { migrateUp } from './storage/migrate.js';
-import type { StorageDriver } from './storage/driver.js';
-import { SqliteDriver } from './storage/sqlite/sqlite-driver.js';
+import { openDriver } from './storage/open.js';
 import { GrowthTaskRepository } from './task/repository.js';
 import {
   ChannelFailureRepository,
@@ -22,19 +19,6 @@ import {
   type StartupCheckReport,
 } from './startup/self-check.js';
 
-async function createDriver(): Promise<StorageDriver> {
-  const config = loadConfig();
-  if (config.dbDriver === 'postgres') {
-    const url = process.env.DATABASE_URL;
-    if (!url) throw new Error('DATABASE_URL is required for GA_DB_DRIVER=postgres');
-    return PostgresDriver.connect(url);
-  }
-  if (config.sqlitePath !== ':memory:') {
-    mkdirSync(dirname(config.sqlitePath), { recursive: true });
-  }
-  return new SqliteDriver(config.sqlitePath);
-}
-
 async function main(): Promise<void> {
   // Load a local .env if present so GA_* settings can live in a file.
   // Kept out of config.ts so unit tests import config without env side effects.
@@ -42,7 +26,7 @@ async function main(): Promise<void> {
     process.loadEnvFile('.env');
   }
   const config = loadConfig();
-  const driver = await createDriver();
+  const driver = await openDriver(config);
   // 1. Migrations always run on boot (idempotent; growth-os convention).
   await migrateUp(driver);
 
