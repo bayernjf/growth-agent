@@ -176,11 +176,12 @@ check('both tasks drafting', (await tasks.get(writeTask.taskId)).status === 'dra
 // --- 3. production: loom draft for write, fix draft for fix -> pr_opened ---
 console.log('3) production batches (QA gates + open PR, never merge)');
 const writeRef = await loom.submitTopicDraft({
-  taskId: writeTask.taskId, query: WRITE_QUERY, angle: 'guide', siteId: site.id, evidenceSignalIds: [],
+  taskId: writeTask.taskId, finalId: 'fcw_smoke_write', query: WRITE_QUERY,
+  angle: 'guide', siteId: site.id, evidenceSignalIds: [],
 });
-const writeContent = await loom.getContent(writeRef.finalId);
+const writeContent = await loom.getContent(writeRef.contentId);
 check('loom mock returned reviewable content',
-  writeContent.status === 'awaiting_review' && (writeContent.paragraphs ?? []).length === 3);
+  writeContent.status === 'review' && typeof writeContent.body === 'string' && writeContent.body.length > 0);
 const drafts = {
   write: {
     taskType: 'write',

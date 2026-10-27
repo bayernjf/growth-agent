@@ -26,6 +26,7 @@ const offlineConfig: AppConfig = {
   gscMode: 'off',
   gscTokenDir: '/tmp/tokens',
   serpMode: 'off',
+  loomMode: 'off',
   githubMode: 'off',
   githubBaseBranch: 'main',
   reportDir: '/tmp/reports',
@@ -88,6 +89,10 @@ describe('checkCredentialPresence (fail-closed boot matrix)', () => {
       'GA_GITHUB_REPO',
       'GA_GITHUB_WEBHOOK_SECRET(>=16)',
     ]);
+    const loom = checkCredentialPresence({ ...offlineConfig, loomMode: 'online' }).find(
+      p => p.connector === 'loom',
+    );
+    expect(loom?.missing).toEqual(['GA_LOOM_URL', 'GA_LOOM_TENANT_ID']);
   });
 
   it('passes online zeus when all credentials are present', () => {
