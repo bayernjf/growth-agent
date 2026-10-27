@@ -45,7 +45,8 @@ curl http://127.0.0.1:8790/healthz
 
 ## 当前状态
 
-- W1–W9 已完成（本地 main，无 remote、不 push）：数据层/状态机（T-A2）、zeus
+- W1–W9 已完成（私有 remote `github.com/bayernjf/growth-agent` 已建、main 已推，
+  尚未 launch / dogfood 评审）：数据层/状态机（T-A2）、zeus
   决策客户端与入站 webhook（T-A3/T-A5）、GSC/SERP/Publisher 连接器 offline 契约
   （T-B1/B2/B3、T-C1、T-D1）、QA 三闸（T-E1/E2/E3）、GitHub publisher 与入站
   webhook（T-D2/D3）、每日剧本/对账/成本/周报（T-A4/A6/A7/A8）、compose 部署与
