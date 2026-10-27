@@ -51,9 +51,14 @@ curl http://127.0.0.1:8790/healthz
   （T-B1/B2/B3、T-C1、T-D1）、QA 三闸（T-E1/E2/E3）、GitHub publisher 与入站
   webhook（T-D2/D3）、每日剧本/对账/成本/周报（T-A4/A6/A7/A8）、compose 部署与
   自托管指南（T-F1/F2/F3）、loom 端口+mock（T-E4）、三站点配置/离线全链路冒烟/
-  30 天数据包（T-H1/H2/H3）。`npm run check:all` 五门全绿，`npm run smoke:offline`
+  30 天数据包（T-H1/H2/H3）。W10：loom openapi 对照 + 真实 adapter（T-E4 在线半）：
+  按 loom FastAPI 契约落地 `POST /api/content/generate` 与 `GET /api/content/{id}`
+  的 HTTP adapter，默认 off、缺 url/tenant 拒绝型 422、fixture 离线测试，保留 mock。
+  `npm run check:all` 五门全绿（32 文件 / 289 测试，基线 280），`npm run smoke:offline`
   离线全链路冒烟通过。
 - 明确未做（卡外部，不影响离线链路）：真实 GSC/SERP/GitHub 在线 e2e（T-B4/T-C2/
   T-D4，需真实凭据）、真实 30 天连跑（T-H4）、dogfood 评审与定价（T-H5，卡 owner
-  决策）；loom 仅 mock，真实字段/路径待 openapi 对照后接 adapter。
+  决策）；loom 挂账：final_id 需 operator 经 `/api/fcw/assemble` 线下发证（需
+  product_space_id/platform/slot_id，growth-agent 无此模型），真实 loom 在线 e2e
+  待凭据与运行时（T-E5）；approve/reject/revise 属人审台，growth-agent 永不代调。
 - 部署见 `deploy/SELF_HOSTING.md`，任务进度见 bayjf 仓 tier0 任务拆解文档。
