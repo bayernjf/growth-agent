@@ -39,6 +39,14 @@ export interface AppConfig {
   loomToken?: string | undefined;
   /** Wire language sent on generate (default 'en'). */
   loomLanguage?: string | undefined;
+  /**
+   * Draft source for the production batch (§5.C). inbox = operator-supplied
+   * JSON per task, zero credentials; loom = operator supplies only a final_id
+   * and loom writes the article (requires GA_LOOM_MODE=online).
+   */
+  draftMode: 'inbox' | 'loom';
+  /** Directory holding one <taskId>.json draft envelope per task. */
+  draftInboxDir: string;
   /** GitHub publisher (T-D2/D3). off = deterministic offline fake publisher. */
   githubMode: 'off' | 'online';
   /** PAT with repo scope (least privilege); server-side only, never logged. */
@@ -71,6 +79,7 @@ export function loadConfig(): AppConfig {
   const serpMode = process.env.GA_SERP_MODE === 'online' ? 'online' : 'off';
   const githubMode = process.env.GA_GITHUB_MODE === 'online' ? 'online' : 'off';
   const loomMode = process.env.GA_LOOM_MODE === 'online' ? 'online' : 'off';
+  const draftMode = process.env.GA_DRAFT_MODE === 'loom' ? 'loom' : 'inbox';
   return {
     host: process.env.GA_HOST ?? '127.0.0.1',
     port: num('GA_PORT', 8790),
@@ -95,6 +104,8 @@ export function loadConfig(): AppConfig {
     loomTenantId: process.env.GA_LOOM_TENANT_ID || undefined,
     loomToken: process.env.GA_LOOM_TOKEN || undefined,
     loomLanguage: process.env.GA_LOOM_LANGUAGE || undefined,
+    draftMode,
+    draftInboxDir: process.env.GA_DRAFT_INBOX_DIR ?? './data/drafts',
     githubMode,
     githubToken: process.env.GA_GITHUB_TOKEN || undefined,
     githubOwner: process.env.GA_GITHUB_OWNER || undefined,
