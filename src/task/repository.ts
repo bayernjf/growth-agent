@@ -5,6 +5,7 @@
 import type { StorageDriver } from '../storage/driver.js';
 import type {
   GrowthTask,
+  GrowthTaskContext,
   GrowthTaskCreateInput,
   GrowthTaskStatus,
   GrowthTaskType,
@@ -26,6 +27,7 @@ interface GrowthTaskRow {
   qa_result: string | null;
   verify_result: string | null;
   verify_checks: string | null;
+  context: string | null;
   qa_revision_count: number;
   cost_micros_total: number;
   idempotency_key: string;
@@ -35,8 +37,19 @@ interface GrowthTaskRow {
 
 const COLUMNS =
   'id, site_id, task_type, signal_id, zeus_decision_id, loom_content_id, pr_ref,' +
-  ' status, qa_result, verify_result, verify_checks, qa_revision_count, cost_micros_total,' +
-  ' idempotency_key, created_at, updated_at';
+  ' status, qa_result, verify_result, verify_checks, context, qa_revision_count,' +
+  ' cost_micros_total, idempotency_key, created_at, updated_at';
+
+/**
+ * JSON columns come back as TEXT from sqlite but as already-parsed objects
+ * from postgres JSONB (node-pg runs its own type parsers, and this driver
+ * installs no override). Accept both so the mapping is dialect-agnostic.
+ */
+function parseJsonColumn<T>(value: unknown): T | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value === 'string') return JSON.parse(value) as T;
+  return value as T;
+}
 
 /** Partial mutable fields; the orchestrator writes each as upstream replies arrive. */
 export interface GrowthTaskPatch {
@@ -48,6 +61,8 @@ export interface GrowthTaskPatch {
   verifyChecks?: VerifyCheck[];
   costMicrosTotal?: number;
   qaRevisionCount?: number;
+  /** Whole-value replace; the sweep adds publishedUrl once a PR is open. */
+  context?: GrowthTaskContext;
 }
 
 export class GrowthTaskRepository {
@@ -66,12 +81,13 @@ export class GrowthTaskRepository {
       createdAt: now,
       updatedAt: now,
     };
+    if (input.context !== undefined) task.context = input.context;
     await this.driver.run(
       `INSERT INTO growth_tasks
         (id, site_id, task_type, signal_id, zeus_decision_id, loom_content_id,
-         pr_ref, status, qa_result, verify_result, qa_revision_count,
+         pr_ref, status, qa_result, verify_result, context, qa_revision_count,
          cost_micros_total, idempotency_key, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         task.id,
         task.siteId,
@@ -83,6 +99,7 @@ export class GrowthTaskRepository {
         task.status,
         null,
         null,
+        task.context !== undefined ? JSON.stringify(task.context) : null,
         task.qaRevisionCount,
         task.costMicrosTotal,
         task.idempotencyKey,
@@ -132,8 +149,8 @@ export class GrowthTaskRepository {
       );
       for (const row of rows) {
         if (row.pr_ref === null) continue;
-        const parsed = JSON.parse(row.pr_ref) as Partial<PrRef>;
-        if (parsed.number === prNumber) return this.map(row);
+        const parsed = parseJsonColumn<Partial<PrRef>>(row.pr_ref);
+        if (parsed?.number === prNumber) return this.map(row);
       }
     }
     return undefined;
@@ -197,6 +214,10 @@ export class GrowthTaskRepository {
       sets.push('qa_revision_count = ?');
       params.push(patch.qaRevisionCount);
     }
+    if (patch.context !== undefined) {
+      sets.push('context = ?');
+      params.push(JSON.stringify(patch.context));
+    }
     if (sets.length === 1) return 0;
     params.push(id);
     const result = await this.driver.run(
@@ -221,10 +242,16 @@ export class GrowthTaskRepository {
     if (row.signal_id !== null) task.signalId = row.signal_id;
     if (row.zeus_decision_id !== null) task.zeusDecisionId = row.zeus_decision_id;
     if (row.loom_content_id !== null) task.loomContentId = row.loom_content_id;
-    if (row.pr_ref !== null) task.prRef = JSON.parse(row.pr_ref) as PrRef;
-    if (row.qa_result !== null) task.qaResult = JSON.parse(row.qa_result) as QaResult;
-    if (row.verify_result !== null) task.verifyResult = JSON.parse(row.verify_result) as VerifyResult;
-    if (row.verify_checks !== null) task.verifyChecks = JSON.parse(row.verify_checks) as VerifyCheck[];
+    const prRef = parseJsonColumn<PrRef>(row.pr_ref);
+    if (prRef !== undefined) task.prRef = prRef;
+    const qaResult = parseJsonColumn<QaResult>(row.qa_result);
+    if (qaResult !== undefined) task.qaResult = qaResult;
+    const verifyResult = parseJsonColumn<VerifyResult>(row.verify_result);
+    if (verifyResult !== undefined) task.verifyResult = verifyResult;
+    const verifyChecks = parseJsonColumn<VerifyCheck[]>(row.verify_checks);
+    if (verifyChecks !== undefined) task.verifyChecks = verifyChecks;
+    const context = parseJsonColumn<GrowthTaskContext>(row.context);
+    if (context !== undefined) task.context = context;
     return task;
   }
 }

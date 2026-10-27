@@ -60,6 +60,28 @@ export interface VerifyCheck {
   clicksDelta: number;
 }
 
+/**
+ * Candidate context captured by the morning batch (migration 007). The daily
+ * runner scores a query (write) or a declining page (fix) and sends both to
+ * zeus; persisting them here is what lets the production and verification
+ * batches run later, in a separate process, against the stored task alone.
+ */
+export interface GrowthTaskContext {
+  /** Write: the target query. Fix: the declining page URL. */
+  query: string;
+  /** Fix tasks: the GSC page URL rechecked by §5.D verification. */
+  targetUrl?: string | undefined;
+  /** The angle string submitted to zeus alongside the decision. */
+  angle: string;
+  /**
+   * Write tasks: the absolute URL the opened PR is expected to publish, derived
+   * from the draft slug at PR time so §5.D verification has a page to recheck.
+   * A human reviewer who moves the file during review invalidates this; the
+   * task then reports no gain rather than guessing a new path.
+   */
+  publishedUrl?: string | undefined;
+}
+
 export interface GrowthTask {
   /** `gt_*` application-generated id (§3.1). */
   id: string;
@@ -74,6 +96,8 @@ export interface GrowthTask {
   verifyResult?: VerifyResult;
   /** §5.D accumulated recheck history (migration 005). */
   verifyChecks?: VerifyCheck[];
+  /** §5.A candidate context (migration 007): query / targetUrl / angle. */
+  context?: GrowthTaskContext;
   /** Persisted counter for the §3.2 one-shot qa_revision rework guard. */
   qaRevisionCount: number;
   costMicrosTotal: number;
@@ -91,4 +115,6 @@ export interface GrowthTaskCreateInput {
   /** Defaults to `signaled` (§3.2 entry state). */
   status?: GrowthTaskStatus;
   costMicrosTotal?: number;
+  /** §5.A candidate context; required by the later production/verify batches. */
+  context?: GrowthTaskContext;
 }

@@ -186,9 +186,26 @@ export class DailyScriptRunner {
     // 6. One zeus decision per selected task, signaled -> deciding.
     const submitted: DailyRunResult['submitted'] = [];
     const idFactory = d.idFactory ?? defaultIdFactory;
-    const selected: Array<{ kind: 'write' | 'fix'; query: string; targetUrl?: string; signalId: string }> = [
-      ...selection.selectedWrites.map(w => ({ kind: 'write' as const, query: w.query, signalId: w.signalId })),
-      ...selection.selectedFixes.map(f => ({ kind: 'fix' as const, query: f.pageUrl, targetUrl: f.pageUrl, signalId: f.signalId })),
+    const selected: Array<{
+      kind: 'write' | 'fix';
+      query: string;
+      targetUrl?: string;
+      signalId: string;
+      angle: string;
+    }> = [
+      ...selection.selectedWrites.map(w => ({
+        kind: 'write' as const,
+        query: w.query,
+        signalId: w.signalId,
+        angle: 'daily write candidate: informational demand with no top-10 coverage',
+      })),
+      ...selection.selectedFixes.map(f => ({
+        kind: 'fix' as const,
+        query: f.pageUrl,
+        targetUrl: f.pageUrl,
+        signalId: f.signalId,
+        angle: 'daily fix candidate: declining page with natural exposure',
+      })),
     ];
     for (const [index, candidate] of selected.entries()) {
       const taskId = idFactory(day, candidate.kind, index);
@@ -199,6 +216,13 @@ export class DailyScriptRunner {
           type: candidate.kind,
           signalId: candidate.signalId,
           status: 'signaled',
+          // Persisted so the production and verification batches can run in a
+          // later process against the stored task alone (migration 007).
+          context: {
+            query: candidate.query,
+            angle: candidate.angle,
+            ...(candidate.targetUrl !== undefined ? { targetUrl: candidate.targetUrl } : {}),
+          },
         },
         nowIso(),
       );
@@ -209,10 +233,7 @@ export class DailyScriptRunner {
             taskId,
             kind: candidate.kind,
             query: candidate.query,
-            angle:
-              candidate.kind === 'write'
-                ? `daily write candidate: informational demand with no top-10 coverage`
-                : `daily fix candidate: declining page with natural exposure`,
+            angle: candidate.angle,
             ...(candidate.targetUrl !== undefined ? { targetUrl: candidate.targetUrl } : {}),
             evidenceSignalIds: [candidate.signalId],
           });
