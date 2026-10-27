@@ -54,11 +54,39 @@ curl http://127.0.0.1:8790/healthz
   30 天数据包（T-H1/H2/H3）。W10：loom openapi 对照 + 真实 adapter（T-E4 在线半）：
   按 loom FastAPI 契约落地 `POST /api/content/generate` 与 `GET /api/content/{id}`
   的 HTTP adapter，默认 off、缺 url/tenant 拒绝型 422、fixture 离线测试，保留 mock。
-  `npm run check:all` 五门全绿（32 文件 / 289 测试，基线 280），`npm run smoke:offline`
-  离线全链路冒烟通过。
-- 明确未做（卡外部，不影响离线链路）：真实 GSC/SERP/GitHub 在线 e2e（T-B4/T-C2/
-  T-D4，需真实凭据）、真实 30 天连跑（T-H4）、dogfood 评审与定价（T-H5，卡 owner
-  决策）；loom 挂账：final_id 需 operator 经 `/api/fcw/assemble` 线下发证（需
-  product_space_id/platform/slot_id，growth-agent 无此模型），真实 loom 在线 e2e
-  待凭据与运行时（T-E5）；approve/reject/revise 属人审台，growth-agent 永不代调。
-- 部署见 `deploy/SELF_HOSTING.md`，任务进度见 bayjf 仓 tier0 任务拆解文档。
+- W11 让循环真正可运行。此前 `DailyScriptRunner`、`runProductionBatch`、
+  `runVerificationBatch` 的调用方**只有测试和离线冒烟脚本**：部署后的进程只提供
+  healthz 和两个入站 webhook，收到审批也不会做任何事。本 wave：
+  - `dist/cli/batch.js`（`npm run batch -- <daily|production|verify|report|packet>`）
+    让 §5 整条循环可被 cron / compose 调度；`deploy/batch-scheduler.sh` + compose
+    `batch` 服务按 tick 依次跑三步（三步都幂等，空 tick 是 no-op）。
+  - migration 007 `growth_tasks.context`：daily 之前只把 query / targetUrl 发给
+    zeus 而从不落库，导致生产与复查批次拿不到任务上下文。现在
+    `{query, targetUrl, angle}` 随任务持久化，write 任务开 PR 时补记 `publishedUrl`。
+  - 草稿来源端口 `GA_DRAFT_MODE=inbox|loom`：inbox 为默认，操作者按任务投放
+    `<taskId>.json`，零网络零凭据；loom 模式只用操作者线下发证的 final_id，正文由
+    loom 产出。缺文件不伪造内容、**不消耗**唯一一次 qa_revision 返工；loom 未 online
+    时选 loom 直接 fail-closed，避免 mock 正文进入真实 PR。
+  - `runProductionSweep`：把 `runProductionBatch` 接上真实证据（GSC 快照、SERP、
+    自身未合并 PR）。fix 任务**只**用自己目标页做需求证据——value gate 会把
+    gscPages 的 impressions 求和，混入整站会让无自然曝光页白过闸。
+  - T-B4：GSC searchanalytics 真实传输（access token 刷新与重封、401 强制刷新重试一次、
+    §4.1 错误映射、窗口截断保护）。契约级假上游覆盖 12 个用例，**尚未用真实属性验证**。
+  - `.nvmrc` 固定 Node 22：fnm 默认 Node 20 时 `node:sqlite` 不存在，16 个测试文件
+    加载失败，套件会假红成 180 通过。
+  - 门禁：`npm run check:all` 五门全绿（35 文件 / 329 测试，基线 32/289），
+    `npm run smoke:offline` 通过；另有一次真进程端到端（构建产物 + 文件型 sqlite +
+    真签名 zeus webhook）跑通 daily → 审批 → production → verify → report → packet。
+- 明确未做 / 待验证：
+  - **零凭据默认模式产不出候选**：`GA_*_MODE=off` 的 fixture 回放忽略请求维度（GSC
+    无论要 page 还是 query 都返回同一批 query 维行），且对任何 query 返回同一份 SERP
+    （自有域名恒在第 1 位），因此 fresh install 的 `daily` 永远是 0 write / 0 fix。
+    plumbing 可跑，零凭据 dogfood 还不成立。
+  - 真实凭据 e2e：GSC（T-B4 代码已落地，待真实属性核对 wire 形状）、SERP（T-C2 未用
+    真 key 验证）、GitHub（T-D4）、loom（T-E5）。
+  - 真实 30 天连跑（T-H4）、dogfood 评审与定价（T-H5，卡 owner 决策）。
+  - loom 挂账：final_id 需 operator 经 `/api/fcw/assemble` 线下发证（需
+    product_space_id/platform/slot_id，growth-agent 无此模型）；approve/reject/revise
+    属人审台，growth-agent 永不代调。
+- 部署见 `deploy/SELF_HOSTING.md`，跨会话状态见 `handoff.md`，任务进度见 bayjf 仓
+  tier0 任务拆解文档。

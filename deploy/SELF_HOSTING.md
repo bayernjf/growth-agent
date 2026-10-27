@@ -52,6 +52,39 @@ curl -s http://127.0.0.1:8790/healthz | jq
 zeus 探活、启动对账结果）。任何 online 模式缺凭据、或 zeus 不可达，orchestrator
 会在启动阶段 fail-closed 退出（`docker compose logs orchestrator` 看缺失清单）。
 
+### 3.3 批次调度与草稿收件箱
+
+orchestrator 进程只提供 healthz 和两个入站 webhook；真正跑批的是 `batch` 服务
+（`deploy/batch-scheduler.sh`，镜像内无 cron，沿用 `db-backup` 的 sleep-loop）。
+每个 tick 依次执行 `daily` → `production` → `verify`，三步都幂等，空 tick 是 no-op：
+
+```bash
+docker compose logs -f batch
+# 手动触发一次（不依赖调度）
+docker compose exec batch node --experimental-sqlite dist/cli/batch.js production --site bayjf.com
+```
+
+`report` / `packet` **不在循环里**：它们会生成带版本号的新文件而不是覆盖，放进
+小时循环会把 reports 卷刷满。请单独排期调用。
+
+审批通过（zeus → `drafting`）的任务需要一份草稿才能真正开 PR。默认草稿来源是
+操作者收件箱 `GA_DRAFT_INBOX_DIR`（compose 里为 `/data/drafts`）：
+
+```jsonc
+// /data/drafts/gt_20261027_fix_1.json
+{
+  "slug": "guides/legacy-guide",          // write: 建议路径；fix: 现有页面路径
+  "title": "Legacy guide (refreshed)",
+  "changeSummary": "Refresh deteriorated page",
+  "paragraphs": ["...", "...", "..."]      // 至少 3 段（value gate 下限）
+}
+```
+
+文件缺失或结构不合法时，任务留在 `drafting` 等下一个 tick，**既不伪造正文，也不消耗
+任务唯一一次 `qa_revision` 返工**——所以第一次部署可以只放一份草稿、逐个任务推进。
+`GA_DRAFT_MODE=loom` 时该文件只提供 `finalId`（loom 线下发证）与 slug/title，
+正文由 loom 产出；`GA_LOOM_MODE` 不是 `online` 时启动直接失败，避免 mock 正文进 PR。
+
 ## 4. BYOK 凭据（全部 env 注入，仅存 .env / 服务端）
 
 | 凭据 | 变量 | 说明 |
@@ -64,8 +97,13 @@ zeus 探活、启动对账结果）。任何 online 模式缺凭据、或 zeus �
 | GitHub webhook | `GA_GITHUB_WEBHOOK_SECRET`（≥16 字符） | 仓库 Webhook settings 配同一值；回调 `POST /webhooks/github`，Content-Type application/json |
 | 成本估算 | `GA_COST_RATES` | JSON `{"provider": micros/unit}`，格式错误启动即失败；留空则成本记 0 |
 
-全部连接器默认 `off`（离线 fixture），不配置任何凭据即可跑通完整演示链路；
+全部连接器默认 `off`（离线 fixture），不配置任何凭据也能把整条链路跑起来；
 **online 缺凭据一律 fail-closed，不会静默回退到离线数据。**
+
+注意离线模式的边界：fixture 回放**忽略请求输入**（GSC 不论要 page 还是 query 维度都
+返回同一批 query 维行；SERP 对任何 query 都返回同一份结果，自有域名恒在第 1 位），
+因此 `daily` 在离线模式下产出 0 个候选。离线模式验证的是管道与状态机，不是候选
+质量；要看真实候选必须配置 GSC + SERP 凭据。这一条是已知缺口，见 `handoff.md`。
 
 ### GSC OAuth 授权流程
 
