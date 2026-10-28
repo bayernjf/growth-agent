@@ -2,6 +2,11 @@
 // Replays tests/fixtures/serp-fixture.json; zero network, zero BYOK spend.
 // Explicit offline mode — online without login/password gets the rejecting
 // provider instead, never a silent fixture fallback.
+//
+// The tape records one SERP result set per query, mirroring the real
+// DataForSEO endpoint: asking for query A never returns query B's results.
+// Queries the tape did not record replay as an empty result set (no recorded
+// SERP = no SERP evidence), rather than somebody else's results.
 
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -16,9 +21,14 @@ import type {
   SerpResult,
 } from './types.js';
 
+interface RecordedSerp {
+  query: string;
+  results: SerpResult[];
+}
+
 interface SerpFixture {
   keywordIdeas: KeywordIdea[];
-  serp: SerpResult[];
+  serp: RecordedSerp[];
   rankTrack: RankTrackItem[];
 }
 
@@ -28,11 +38,16 @@ const repoRoot = process.env.GA_REPO_ROOT ?? join(here, '..', '..', '..');
 const DEFAULT_FIXTURE_PATH = join(repoRoot, 'tests', 'fixtures', 'serp-fixture.json');
 
 function loadFixture(path: string): SerpFixture {
-  const parsed = JSON.parse(readFileSync(path, 'utf8')) as SerpFixture;
+  const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<SerpFixture>;
   if (!Array.isArray(parsed.keywordIdeas) || !Array.isArray(parsed.serp) || !Array.isArray(parsed.rankTrack)) {
     throw GrowthAgentErrors.validation('serp fixture must contain keywordIdeas[], serp[], rankTrack[]');
   }
-  return parsed;
+  for (const entry of parsed.serp) {
+    if (typeof entry?.query !== 'string' || !Array.isArray(entry.results)) {
+      throw GrowthAgentErrors.validation('serp fixture entries must be { query, results[] }');
+    }
+  }
+  return parsed as SerpFixture;
 }
 
 export class OfflineSerpProvider implements SerpKeywordProvider {
@@ -53,9 +68,12 @@ export class OfflineSerpProvider implements SerpKeywordProvider {
     return (hits.length > 0 ? hits : this.fixture.keywordIdeas).map(k => ({ ...k }));
   }
 
-  async serp(_query: string, opts?: SerpOpts): Promise<SerpResult[]> {
-    const depth = opts?.depth ?? this.fixture.serp.length;
-    return this.fixture.serp.slice(0, depth).map(r => ({ ...r }));
+  async serp(query: string, opts?: SerpOpts): Promise<SerpResult[]> {
+    const depth = opts?.depth;
+    const recorded = this.fixture.serp.find(entry => entry.query === query);
+    if (recorded === undefined) return [];
+    const limit = depth ?? recorded.results.length;
+    return recorded.results.slice(0, limit).map(r => ({ ...r }));
   }
 
   async rankTrack(domain: string, queries: string[]): Promise<RankTrackItem[]> {

@@ -71,15 +71,20 @@ describe('SERP registry discipline (§4.2)', () => {
 });
 
 describe('OfflineSerpProvider deterministic replay', () => {
-  it('keywordIdeas / serp / rankTrack return fixture data', async () => {
+  it('keywordIdeas replays ideas; serp replays per-query result sets', async () => {
     const provider = new OfflineSerpProvider();
-    const ideas = await provider.keywordIdeas('audit');
-    expect(ideas[0]?.keyword).toBe('site audit checklist');
-    const results = await provider.serp('site audit checklist');
+    const ideas = await provider.keywordIdeas('self hosted growth agent');
+    expect(ideas[0]?.keyword).toBe('self hosted growth agent');
+    const results = await provider.serp('self hosted growth agent');
     expect(results.map(r => r.position)).toEqual([1, 2, 3]);
-    const track = await provider.rankTrack('bayjf.com', ['site audit checklist', 'keyword with no presence']);
+    // A different query replays its own recorded SERP, not the same tape.
+    const other = await provider.serp('byok seo automation');
+    expect(other.map(r => r.url)).not.toEqual(results.map(r => r.url));
+    // A query the tape never recorded replays as no SERP evidence.
+    expect(await provider.serp('query with no recorded serp')).toEqual([]);
+    const track = await provider.rankTrack('bayjf.com', ['bayjf portfolio', 'keyword with no presence']);
     expect(track).toEqual([
-      { query: 'site audit checklist', position: 1, url: 'https://bayjf.com/blog/site-audit-checklist' },
+      { query: 'bayjf portfolio', position: 2, url: 'https://bayjf.com/' },
       { query: 'keyword with no presence', position: null, url: null },
     ]);
   });

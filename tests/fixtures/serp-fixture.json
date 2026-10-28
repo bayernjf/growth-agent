@@ -1,18 +1,39 @@
 {
   "keywordIdeas": [
-    { "keyword": "site audit checklist", "volume": 8100, "competition": 0.31, "cpc": 240 },
-    { "keyword": "site audit template", "volume": 1900, "competition": 0.42, "cpc": 310 },
-    { "keyword": "how to audit a website", "volume": 1300, "competition": 0.18, "cpc": 95 },
-    { "keyword": "astro content pipeline", "volume": 590, "competition": 0.09, "cpc": 40 }
+    { "keyword": "self hosted growth agent", "volume": 1200, "competition": 0.12, "cpc": 60 },
+    { "keyword": "byok seo automation", "volume": 600, "competition": 0.21, "cpc": 95 },
+    { "keyword": "astral developer portfolio", "volume": 300, "competition": 0.08, "cpc": 25 }
   ],
   "serp": [
-    { "url": "https://bayjf.com/blog/site-audit-checklist", "title": "Site Audit Checklist (2026)", "position": 1, "description": "A walkthrough of a repeatable site audit." },
-    { "url": "https://example.com/seo/site-audit", "title": "SEO Site Audit Guide", "position": 2, "description": "Generic guide." },
-    { "url": "https://bayjf.com/blog/astro-content-pipeline", "title": "Astro Content Pipeline", "position": 3, "description": "How a static site wires MDX to a CMS." }
+    {
+      "query": "self hosted growth agent",
+      "results": [
+        { "url": "https://en.wikipedia.org/wiki/Self-hosting_(software)", "title": "Self-hosting - Wikipedia", "position": 1, "description": "What self-hosted software is and how it differs from managed hosting." },
+        { "url": "https://example.com/guides/self-hosted-growth", "title": "Self-hosted growth: a complete guide", "position": 2, "description": "How to set up a growth automation pipeline on your own servers." },
+        { "url": "https://news.example.org/growth-agent-roundup", "title": "Growth agent tools news roundup", "position": 3, "description": "News of the latest open-source growth automation tools." }
+      ]
+    },
+    {
+      "query": "byok seo automation",
+      "results": [
+        { "url": "https://vendor.io/pricing", "title": "BYOK SEO Automation Pricing", "position": 1, "description": "Compare plans and buy the best BYOK SEO tool." },
+        { "url": "https://reviews.example.com/seo-tools", "title": "Best BYOK SEO tools 2026", "position": 2, "description": "Reviews and comparison of the top vendors." },
+        { "url": "https://marketplace.example.com/product", "title": "BYOK SEO Automation - Order a demo", "position": 3, "description": "Purchase your license and get started today." }
+      ]
+    },
+    {
+      "query": "astral developer portfolio",
+      "results": [
+        { "url": "https://github.com/bayernjf/astral", "title": "astral - bayernjf", "position": 1, "description": "Source code repository on GitHub." },
+        { "url": "https://bayjf.com/project/astral", "title": "Astral — project case study", "position": 2, "description": "How the astral portfolio project was built and shipped." },
+        { "url": "https://x.com/bayernjf", "title": "bayernjf (@bayernjf)", "position": 3, "description": "Social profile link for the project maintainer." }
+      ]
+    }
   ],
   "rankTrack": [
-    { "query": "site audit checklist", "position": 1, "url": "https://bayjf.com/blog/site-audit-checklist" },
-    { "query": "astro content pipeline", "position": 3, "url": "https://bayjf.com/blog/astro-content-pipeline" },
+    { "query": "bayjf portfolio", "position": 2, "url": "https://bayjf.com/" },
+    { "query": "astral growth agent", "position": 8, "url": "https://bayjf.com/project/astral" },
+    { "query": "byok growth pr agent", "position": 15, "url": "https://bayjf.com/blog/byok-growth-pr" },
     { "query": "keyword with no presence", "position": null, "url": null }
   ]
 }

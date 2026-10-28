@@ -3,10 +3,28 @@
     { "siteUrl": "sc-domain:bayjf.com", "permissionLevel": "siteFull" },
     { "siteUrl": "https://bayjf.com/", "permissionLevel": "siteOwner" }
   ],
-  "analytics": [
-    { "keys": ["site audit checklist"], "clicks": 12, "impressions": 480, "ctr": 0.025, "position": 3.4 },
-    { "keys": ["astro content pipeline"], "clicks": 5, "impressions": 210, "ctr": 0.024, "position": 7.9 },
-    { "keys": ["vite manual chunking guide"], "clicks": 22, "impressions": 1500, "ctr": 0.015, "position": 11.2 },
-    { "keys": ["seo daily pr workflow"], "clicks": 1, "impressions": 96, "ctr": 0.010, "position": 24.6 }
-  ]
+  "windows": {
+    "recent": { "start": "2026-09-28", "end": "2026-10-25" },
+    "prior": { "start": "2026-08-31", "end": "2026-09-27" }
+  },
+  "analytics": {
+    "query": [
+      { "keys": ["site audit checklist"], "clicks": 12, "impressions": 480, "ctr": 0.025, "position": 3.4 },
+      { "keys": ["astro content pipeline"], "clicks": 5, "impressions": 210, "ctr": 0.024, "position": 7.9 },
+      { "keys": ["vite manual chunking guide"], "clicks": 2, "impressions": 140, "ctr": 0.014, "position": 12.6 },
+      { "keys": ["seo daily pr workflow"], "clicks": 1, "impressions": 96, "ctr": 0.010, "position": 24.6 }
+    ],
+    "page": {
+      "recent": [
+        { "keys": ["https://bayjf.com/guides/vite-manual-chunking"], "clicks": 8, "impressions": 900, "ctr": 0.009, "position": 12.4 },
+        { "keys": ["https://bayjf.com/blog/astro-content-pipeline"], "clicks": 31, "impressions": 1420, "ctr": 0.022, "position": 4.2 },
+        { "keys": ["https://bayjf.com/blog/site-audit-checklist"], "clicks": 19, "impressions": 740, "ctr": 0.026, "position": 6.1 }
+      ],
+      "prior": [
+        { "keys": ["https://bayjf.com/guides/vite-manual-chunking"], "clicks": 14, "impressions": 1500, "ctr": 0.009, "position": 7.9 },
+        { "keys": ["https://bayjf.com/blog/astro-content-pipeline"], "clicks": 33, "impressions": 1460, "ctr": 0.023, "position": 4.0 },
+        { "keys": ["https://bayjf.com/blog/site-audit-checklist"], "clicks": 17, "impressions": 690, "ctr": 0.025, "position": 6.4 }
+      ]
+    }
+  }
 }

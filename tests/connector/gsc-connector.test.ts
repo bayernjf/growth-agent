@@ -12,7 +12,8 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, '..', '..');
 const fixture = JSON.parse(readFileSync(join(repoRoot, 'tests/fixtures/gsc-fixture.json'), 'utf8')) as {
   sites: unknown[];
-  analytics: unknown[];
+  windows: { recent: { start: string }; prior: { start: string } };
+  analytics: { query: unknown[]; page: { recent: unknown[]; prior: unknown[] } };
 };
 
 function withEnv(env: Record<string, string | undefined>): ReturnType<typeof loadConfig> {
@@ -100,25 +101,43 @@ describe('GSC registry discipline (§4.1 / growth-os provider pattern)', () => {
 });
 
 describe('OfflineGscProvider deterministic replay', () => {
-  it('replays the recorded sites and analytics rows', async () => {
+  it('replays the recorded sites and the query-dimension rows', async () => {
     const provider = new OfflineGscProvider();
     const sites = await provider.listSites();
     expect(sites).toEqual(fixture.sites);
     const rows = await provider.queryAnalytics({
       siteUrl: 'https://bayjf.com/',
-      startDate: '2026-10-20',
-      endDate: '2026-10-26',
+      startDate: fixture.windows.recent.start,
+      endDate: '2026-10-25',
       dimensions: ['query'],
     });
-    expect(rows).toEqual(fixture.analytics);
+    expect(rows).toEqual(fixture.analytics.query);
+  });
+
+  it('page dimension replays page rows, bucketed by window', async () => {
+    const provider = new OfflineGscProvider();
+    const recent = await provider.queryAnalytics({
+      siteUrl: 'https://bayjf.com/',
+      startDate: fixture.windows.recent.start,
+      endDate: '2026-10-25',
+      dimensions: ['page'],
+    });
+    expect(recent).toEqual(fixture.analytics.page.recent);
+    const prior = await provider.queryAnalytics({
+      siteUrl: 'https://bayjf.com/',
+      startDate: fixture.windows.prior.start,
+      endDate: '2026-09-27',
+      dimensions: ['page'],
+    });
+    expect(prior).toEqual(fixture.analytics.page.prior);
   });
 
   it('honours rowLimit and validates the input contract', async () => {
     const provider = new OfflineGscProvider();
     const rows = await provider.queryAnalytics({
       siteUrl: 'https://bayjf.com/',
-      startDate: '2026-10-20',
-      endDate: '2026-10-26',
+      startDate: fixture.windows.recent.start,
+      endDate: '2026-10-25',
       dimensions: ['query'],
       rowLimit: 2,
     });
