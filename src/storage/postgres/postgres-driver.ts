@@ -15,6 +15,9 @@ export class PostgresDriver implements StorageDriver {
     query: (sql: string, params?: unknown[]) => Promise<{ rows: unknown[]; rowCount: number }>;
     end: () => Promise<void>;
   };
+  // Single-connection client: serialize transactions so BEGIN/COMMIT blocks
+  // cannot interleave across concurrent requests.
+  private txQueue: Promise<unknown> = Promise.resolve();
 
   private constructor(client: PostgresDriver['client']) {
     this.client = client;
@@ -62,6 +65,26 @@ export class PostgresDriver implements StorageDriver {
 
   async exec(sql: string): Promise<void> {
     await this.client.query(sql);
+  }
+
+  async withTransaction<T>(fn: (tx: StorageDriver) => Promise<T>): Promise<T> {
+    const previous = this.txQueue;
+    let release: () => void;
+    this.txQueue = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      await this.client.query('BEGIN');
+      const result = await fn(this);
+      await this.client.query('COMMIT');
+      return result;
+    } catch (error) {
+      await this.client.query('ROLLBACK');
+      throw error;
+    } finally {
+      release!();
+    }
   }
 
   async close(): Promise<void> {

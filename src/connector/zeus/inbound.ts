@@ -24,10 +24,11 @@
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { GrowthAgentError } from '../../errors.js';
+import type { StorageDriver } from '../../storage/driver.js';
 import { GrowthTaskRepository } from '../../task/repository.js';
 import { assertTaskTransition } from '../../task/state-machine.js';
 import type { GrowthTaskStatus } from '../../task/types.js';
-import type {
+import {
   ChannelFailureRepository,
   WebhookDeliveryRepository,
 } from './webhook-repository.js';
@@ -98,12 +99,19 @@ const EVENT_TRANSITIONS: Partial<Record<DecisionEventType, GrowthTaskStatus>> = 
   'timed-out': 'expired',
 };
 
+/** Internal marker: task row vanished between the guarded update and commit. */
+class TaskVanishedError extends Error {}
+
 export interface InboundDeps {
   /** HMAC secret; empty/undefined means the receiver is not configured. */
   secret: string;
+  driver: StorageDriver;
   deliveries: WebhookDeliveryRepository;
   failures: ChannelFailureRepository;
   tasks: GrowthTaskRepository;
+  /** Build repositories bound to a transaction handle (tests inject fakes). */
+  txTasks?: (tx: StorageDriver) => GrowthTaskRepository;
+  txDeliveries?: (tx: StorageDriver) => WebhookDeliveryRepository;
   now: () => string;
 }
 
@@ -292,26 +300,57 @@ export async function handleInboundZeusEvent(
     };
   }
 
-  const changed = await deps.tasks.setStatus(task.id, desired, now);
-  await deps.deliveries.record({
-    deliveryId,
-    decisionId: event.decisionId,
-    eventType: event.type,
-    taskId: task.id,
-    signatureValid: true,
-    processingResult: 'accepted',
-    eventPayload: event,
-    createdAt: now,
-    updatedAt: now,
-  });
-  if (changed === 0) {
-    // Task vanished between read and write: never happened in practice, but
-    // fail loud rather than silently reporting success.
+  // State transition + delivery ledger are one atomic unit (code review H4):
+  // if the ledger write fails the status update rolls back, so a zeus retry
+  // replays cleanly instead of hitting a 409 invalid-transition.
+  try {
+    await deps.driver.withTransaction(async (tx) => {
+      const txTasks = deps.txTasks?.(tx) ?? new GrowthTaskRepository(tx);
+      const txDeliveries = deps.txDeliveries?.(tx) ?? new WebhookDeliveryRepository(tx);
+      const changed = await txTasks.setStatus(task.id, desired, now);
+      if (changed === 0) throw new TaskVanishedError(task.id);
+      await txDeliveries.record({
+        deliveryId,
+        decisionId: event.decisionId,
+        eventType: event.type,
+        taskId: task.id,
+        signatureValid: true,
+        processingResult: 'accepted',
+        eventPayload: event,
+        createdAt: now,
+        updatedAt: now,
+      });
+    });
+  } catch (err) {
+    if (err instanceof TaskVanishedError) {
+      // Task vanished between read and write: never happened in practice, but
+      // fail loud rather than silently reporting success.
+      return {
+        status: 500,
+        body: failureBody(
+          'INTERNAL_ERROR',
+          `growth task ${err.message} vanished during state transition`,
+          true,
+          { taskId: err.message },
+        ),
+      };
+    }
+    // Ledger/transaction failure: nothing committed; tell zeus to retry.
+    deps.failures
+      .upsert({
+        channel: 'zeus_webhook',
+        reason: 'TRANSACTION_FAILED',
+        externalRef: event.decisionId,
+        retryable: true,
+        lastError: err instanceof Error ? err.message : 'transaction failed',
+        now: deps.now(),
+      })
+      .catch(() => undefined);
     return {
       status: 500,
       body: failureBody(
         'INTERNAL_ERROR',
-        `growth task ${task.id} vanished during state transition`,
+        'failed to persist the state transition and delivery ledger',
         true,
         { taskId: task.id },
       ),

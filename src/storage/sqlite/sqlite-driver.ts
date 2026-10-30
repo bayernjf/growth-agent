@@ -15,6 +15,9 @@ const sqlite = nodeRequire('node:sqlite') as typeof import('node:sqlite');
 export class SqliteDriver implements StorageDriver {
   readonly dialect = 'sqlite' as const;
   private readonly db: DatabaseSync;
+  // node:sqlite is synchronous on one connection; serialize BEGIN/COMMIT so
+  // interleaved requests cannot nest transactions.
+  private txQueue: Promise<unknown> = Promise.resolve();
 
   constructor(filename: string) {
     this.db = new sqlite.DatabaseSync(filename);
@@ -36,6 +39,26 @@ export class SqliteDriver implements StorageDriver {
 
   async exec(sql: string): Promise<void> {
     this.db.exec(sql);
+  }
+
+  async withTransaction<T>(fn: (tx: StorageDriver) => Promise<T>): Promise<T> {
+    const previous = this.txQueue;
+    let release: () => void;
+    this.txQueue = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      this.db.exec('BEGIN IMMEDIATE');
+      const result = await fn(this);
+      this.db.exec('COMMIT');
+      return result;
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    } finally {
+      release!();
+    }
   }
 
   async close(): Promise<void> {

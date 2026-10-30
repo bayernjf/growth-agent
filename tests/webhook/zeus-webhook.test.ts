@@ -73,6 +73,7 @@ beforeAll(async () => {
   failures = new ChannelFailureRepository(db);
   app = createZeusWebhookApp({
     secret: SECRET,
+    driver: db,
     deliveries,
     failures,
     tasks,
@@ -336,6 +337,7 @@ describe('inbound zeus webhook: malformed requests', () => {
   it('503 fail-closed when the receiver has no configured secret', async () => {
     const unconfigured = createZeusWebhookApp({
       secret: '',
+      driver: db,
       deliveries,
       failures,
       tasks,
@@ -353,5 +355,47 @@ describe('inbound zeus webhook: malformed requests', () => {
     });
     expect(res.status).toBe(503);
     expect(((await res.json()) as { code: string }).code).toBe('WEBHOOK_NOT_CONFIGURED');
+  });
+});
+
+describe('inbound zeus webhook: state + ledger atomicity (H4)', () => {
+  /** Delivery ledger whose write always fails, simulating a DB error mid-request. */
+  class ExplodingDeliveries extends WebhookDeliveryRepository {
+    async record(): Promise<void> {
+      throw new Error('ledger disk full');
+    }
+  }
+
+  it('rolls the status back when the ledger write fails, so a zeus retry is not 409', async () => {
+    const exploding = new ExplodingDeliveries(db);
+    const failingApp = createZeusWebhookApp({
+      secret: SECRET,
+      driver: db,
+      deliveries: exploding,
+      failures,
+      tasks,
+      txDeliveries: () => exploding,
+      now: () => NOW,
+    });
+    await seedTask('gt_atom1', 'dec_atom', 'deciding');
+    const event = makeEvent({ decisionId: 'dec_atom', at: '2026-10-27T09:00:00.000Z' });
+    const body = JSON.stringify(event);
+    const deliveryId = 'dec_atom:approved:2026-10-27T09:00:00.000Z';
+    const opts = { body, signature: signZeusBody(SECRET, body), deliveryId };
+
+    const first = await pushRaw(failingApp, opts);
+    expect(first.status).toBe(500);
+    // Both sides of the transaction are absent: no state move, no delivery row.
+    expect(await tasks.get('gt_atom1')).toMatchObject({ status: 'deciding' });
+    expect(await deliveries.find(deliveryId)).toBeUndefined();
+
+    // zeus retries the same delivery against a healthy receiver: it must
+    // succeed, not bounce off an illegal deciding->drafting transition.
+    const retry = await pushRaw(app, opts);
+    expect(retry.status).toBe(200);
+    expect(await tasks.get('gt_atom1')).toMatchObject({ status: 'drafting' });
+    expect(await deliveries.find(deliveryId)).toMatchObject({
+      processingResult: 'accepted',
+    });
   });
 });
