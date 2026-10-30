@@ -36,6 +36,7 @@ function makeEvent(overrides: Partial<ZeusDecisionEvent>): ZeusDecisionEvent {
     domain: 'growth.content',
     intent: 'write: "growth homepage content"',
     grade: 'D2',
+    slaHours: 24,
     mode: 'approve-sync',
     status: 'decided',
     ruleId: 'd2-org',
@@ -355,6 +356,75 @@ describe('inbound zeus webhook: malformed requests', () => {
     });
     expect(res.status).toBe(503);
     expect(((await res.json()) as { code: string }).code).toBe('WEBHOOK_NOT_CONFIGURED');
+  });
+});
+
+describe('inbound zeus webhook: approval gate (grade >= D2 and positive slaHours)', () => {
+  async function postApproved(
+    decisionId: string,
+    overrides: Partial<ZeusDecisionEvent> & { omitSla?: boolean },
+  ): Promise<Response> {
+    await seedTask(`gt_gate_${decisionId}`, decisionId, 'deciding');
+    const event = makeEvent({
+      decisionId,
+      at: `2026-10-27T08:0${decisionId.slice(-1)}:00.000Z`,
+      ...overrides,
+    });
+    if (overrides.omitSla) delete event.slaHours;
+    const body = JSON.stringify(event);
+    return pushRaw(app, {
+      body,
+      signature: signZeusBody(SECRET, body),
+      deliveryId: `${decisionId}:approved:${event.at}`,
+    });
+  }
+
+  it('rejects grade below D2 with 422, records rejected delivery + channel failure, keeps state', async () => {
+    const res = await postApproved('dec_g1', { grade: 'D1' });
+    expect(res.status).toBe(422);
+    expect(((await res.json()) as { code: string }).code).toBe('INVALID_APPROVAL_GATE');
+    expect(await tasks.get('gt_gate_dec_g1')).toMatchObject({ status: 'deciding' });
+    const deliveryId = 'dec_g1:approved:2026-10-27T08:01:00.000Z';
+    expect(await deliveries.find(deliveryId)).toMatchObject({
+      processingResult: 'rejected',
+      errorCode: 'INVALID_APPROVAL_GATE',
+    });
+    expect(await failures.get('cf:zeus_webhook:INVALID_APPROVAL_GATE')).toBeDefined();
+  });
+
+  it('rejects D2 approved events with missing, zero or non-number slaHours', async () => {
+    const missing = await postApproved('dec_g2', { omitSla: true });
+    expect(missing.status).toBe(422);
+    const zero = await postApproved('dec_g3', { slaHours: 0 });
+    expect(zero.status).toBe(422);
+    expect(await tasks.get('gt_gate_dec_g2')).toMatchObject({ status: 'deciding' });
+    expect(await tasks.get('gt_gate_dec_g3')).toMatchObject({ status: 'deciding' });
+  });
+
+  it('still accepts rejected/timed-out events without any grade or SLA gate', async () => {
+    await seedTask('gt_gate_rej', 'dec_g4', 'deciding');
+    const event = makeEvent({
+      type: 'rejected',
+      decisionId: 'dec_g4',
+      at: '2026-10-27T08:04:00.000Z',
+      grade: 'D0',
+      status: 'rejected',
+    });
+    delete event.slaHours;
+    const body = JSON.stringify(event);
+    const res = await pushRaw(app, {
+      body,
+      signature: signZeusBody(SECRET, body),
+      deliveryId: 'dec_g4:rejected:2026-10-27T08:04:00.000Z',
+    });
+    expect(res.status).toBe(200);
+    expect(await tasks.get('gt_gate_rej')).toMatchObject({ status: 'rejected' });
+  });
+
+  it('accepts D3 approved events as meeting the gate', async () => {
+    const res = await postApproved('dec_g5', { grade: 'D3', mode: 'human-led' });
+    expect(res.status).toBe(200);
+    expect(await tasks.get('gt_gate_dec_g5')).toMatchObject({ status: 'drafting' });
   });
 });
 

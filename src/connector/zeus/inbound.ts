@@ -99,6 +99,31 @@ const EVENT_TRANSITIONS: Partial<Record<DecisionEventType, GrowthTaskStatus>> = 
   'timed-out': 'expired',
 };
 
+/**
+ * zeus grade ordering (zeus/src/core/grading/grade.ts GRADE_MODES):
+ * D0 auto < D1 approve-async < D2 approve-sync < D3 human-led. An `approved`
+ * event only makes sense for grades that required a real approval gate.
+ */
+const GRADE_RANK: Readonly<Record<string, number>> = { D0: 0, D1: 1, D2: 2, D3: 3 };
+const MIN_APPROVED_GRADE = 2;
+
+/**
+ * Defense in depth (code review H5): the transition webhook is authenticated,
+ * but an `approved` event still has to prove it carries the decision grade and
+ * SLA the kernel would have required. grade/slaHours are otherwise only type
+ * fields that nothing reads.
+ */
+function approvalGateViolation(event: ZeusDecisionEvent): string | undefined {
+  const gradeRank = GRADE_RANK[event.grade];
+  if (gradeRank === undefined || gradeRank < MIN_APPROVED_GRADE) {
+    return `approved event requires grade >= D2 (got ${JSON.stringify(event.grade)})`;
+  }
+  if (typeof event.slaHours !== 'number' || !Number.isFinite(event.slaHours) || event.slaHours <= 0) {
+    return `approved event requires a positive slaHours (got ${JSON.stringify(event.slaHours)})`;
+  }
+  return undefined;
+}
+
 /** Internal marker: task row vanished between the guarded update and commit. */
 class TaskVanishedError extends Error {}
 
@@ -210,6 +235,39 @@ export async function handleInboundZeusEvent(
   }
 
   const desired = EVENT_TRANSITIONS[event.type];
+
+  if (event.type === 'approved') {
+    const gateReason = approvalGateViolation(event);
+    if (gateReason !== undefined) {
+      // Authenticated but semantically untrusted: never drive the state
+      // machine. A 4xx tells zeus not to retry; reconciliation is the path.
+      await deps.deliveries.record({
+        deliveryId,
+        decisionId: event.decisionId,
+        eventType: event.type,
+        signatureValid: true,
+        processingResult: 'rejected',
+        errorCode: 'INVALID_APPROVAL_GATE',
+        eventPayload: event,
+        createdAt: deps.now(),
+        updatedAt: deps.now(),
+      });
+      await deps.failures.upsert({
+        channel: 'zeus_webhook',
+        reason: 'INVALID_APPROVAL_GATE',
+        externalRef: event.decisionId,
+        retryable: false,
+        lastError: gateReason,
+        now: deps.now(),
+      });
+      return {
+        status: 422,
+        body: failureBody('INVALID_APPROVAL_GATE', gateReason, false, {
+          decisionId: event.decisionId,
+        }),
+      };
+    }
+  }
 
   if (desired === undefined) {
     // created/late: audit-only per the task brief (the orchestrator itself
