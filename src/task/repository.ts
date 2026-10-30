@@ -128,13 +128,15 @@ export class GrowthTaskRepository {
   }
 
   /**
-   * Resolve the local task linked to a GitHub PR number (§6.1 inbound
-   * writeback). pr_ref is stored as JSON with dialect-specific extraction
-   * syntax; the task volume is tiny (one write + one fix per day hard cap),
-   * so lifecycle rows are read and filtered in JS instead of embedding
-   * sqlite json_extract / postgres ->> differences in the SQL.
+   * Resolve the local task linked to a GitHub PR in a specific repository
+   * (§6.1 inbound writeback). Both repo full name and number must match: the
+   * same PR number exists independently in every repository, so number alone
+   * can bind the event to another site's task. pr_ref is stored as JSON with
+   * dialect-specific extraction syntax; the task volume is tiny (one write +
+   * one fix per day hard cap), so lifecycle rows are read and filtered in JS
+   * instead of embedding sqlite json_extract / postgres ->> differences.
    */
-  async findByPrNumber(prNumber: number): Promise<GrowthTask | undefined> {
+  async findByPrNumber(repoFullName: string, prNumber: number): Promise<GrowthTask | undefined> {
     const statuses: GrowthTaskStatus[] = [
       'pr_opened',
       'awaiting_merge',
@@ -150,7 +152,9 @@ export class GrowthTaskRepository {
       for (const row of rows) {
         if (row.pr_ref === null) continue;
         const parsed = parseJsonColumn<Partial<PrRef>>(row.pr_ref);
-        if (parsed?.number === prNumber) return this.map(row);
+        if (parsed?.number === prNumber && parsed?.repo === repoFullName) {
+          return this.map(row);
+        }
       }
     }
     return undefined;
