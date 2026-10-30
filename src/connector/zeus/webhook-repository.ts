@@ -221,3 +221,29 @@ export class ChannelFailureRepository {
     return out;
   }
 }
+
+/**
+ * Replay defense for v2 webhooks (migration 008): one row per nonce accepted
+ * inside the freshness window. Business idempotency stays with the
+ * delivery-id ledger; this only stops a captured signed request being replayed.
+ */
+export class WebhookNonceRepository {
+  /** Rows older than this on every consume are pruned (generous: 24h). */
+  private static readonly RETENTION_MS = 24 * 60 * 60 * 1000;
+
+  constructor(private readonly driver: StorageDriver) {}
+
+  /**
+   * Atomically claim a nonce. Returns false when it was already consumed.
+   * Pruning is best-effort and never blocks acceptance.
+   */
+  async consume(nonce: string, nowIso: string): Promise<boolean> {
+    const pruneBefore = new Date(Date.parse(nowIso) - WebhookNonceRepository.RETENTION_MS).toISOString();
+    await this.driver.run('DELETE FROM zeus_webhook_nonces WHERE seen_at < ?', [pruneBefore]);
+    const result = await this.driver.run(
+      'INSERT INTO zeus_webhook_nonces (nonce, seen_at) VALUES (?, ?) ON CONFLICT(nonce) DO NOTHING',
+      [nonce, nowIso],
+    );
+    return result.changes > 0;
+  }
+}
