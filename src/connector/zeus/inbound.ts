@@ -101,8 +101,12 @@ const EVENT_TRANSITIONS: Partial<Record<DecisionEventType, GrowthTaskStatus>> = 
 
 /**
  * zeus grade ordering (zeus/src/core/grading/grade.ts GRADE_MODES):
- * D0 auto < D1 approve-async < D2 approve-sync < D3 human-led. An `approved`
- * event only makes sense for grades that required a real approval gate.
+ * D0 auto < D1 approve-async < D2 approve-sync < D3 human-led. Note D1 is a
+ * genuine human approval too and zeus emits `approved` for it; the >=D2 floor
+ * below is therefore growth-agent's OWN domain contract (README: every growth
+ * task is graded D2), not a general property of zeus events. A D1 reaching
+ * this service means the policy/config is wrong, and failing closed is the
+ * wanted behavior.
  */
 const GRADE_RANK: Readonly<Record<string, number>> = { D0: 0, D1: 1, D2: 2, D3: 3 };
 const MIN_APPROVED_GRADE = 2;
