@@ -260,7 +260,7 @@ export async function handleInboundGithubEvent(
     };
   }
 
-  const task = await deps.tasks.findByPrNumber(prNumber);
+  const task = await deps.tasks.findByPrNumber(event.repository.full_name, prNumber);
   if (task === undefined) {
     await deps.deliveries.record({
       id,

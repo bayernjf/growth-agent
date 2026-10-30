@@ -58,6 +58,7 @@ async function main(): Promise<void> {
     '/webhooks/zeus',
     createZeusWebhookApp({
       secret: config.zeusWebhookSecret ?? '',
+      driver,
       deliveries: new WebhookDeliveryRepository(driver),
       failures,
       tasks,

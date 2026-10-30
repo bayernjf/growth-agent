@@ -24,10 +24,11 @@
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { GrowthAgentError } from '../../errors.js';
+import type { StorageDriver } from '../../storage/driver.js';
 import { GrowthTaskRepository } from '../../task/repository.js';
 import { assertTaskTransition } from '../../task/state-machine.js';
 import type { GrowthTaskStatus } from '../../task/types.js';
-import type {
+import {
   ChannelFailureRepository,
   WebhookDeliveryRepository,
 } from './webhook-repository.js';
@@ -98,12 +99,48 @@ const EVENT_TRANSITIONS: Partial<Record<DecisionEventType, GrowthTaskStatus>> = 
   'timed-out': 'expired',
 };
 
+/**
+ * zeus grade ordering (zeus/src/core/grading/grade.ts GRADE_MODES):
+ * D0 auto < D1 approve-async < D2 approve-sync < D3 human-led. Note D1 is a
+ * genuine human approval too and zeus emits `approved` for it; the >=D2 floor
+ * below is therefore growth-agent's OWN domain contract (README: every growth
+ * task is graded D2), not a general property of zeus events. A D1 reaching
+ * this service means the policy/config is wrong, and failing closed is the
+ * wanted behavior.
+ */
+const GRADE_RANK: Readonly<Record<string, number>> = { D0: 0, D1: 1, D2: 2, D3: 3 };
+const MIN_APPROVED_GRADE = 2;
+
+/**
+ * Defense in depth (code review H5): the transition webhook is authenticated,
+ * but an `approved` event still has to prove it carries the decision grade and
+ * SLA the kernel would have required. grade/slaHours are otherwise only type
+ * fields that nothing reads.
+ */
+function approvalGateViolation(event: ZeusDecisionEvent): string | undefined {
+  const gradeRank = GRADE_RANK[event.grade];
+  if (gradeRank === undefined || gradeRank < MIN_APPROVED_GRADE) {
+    return `approved event requires grade >= D2 (got ${JSON.stringify(event.grade)})`;
+  }
+  if (typeof event.slaHours !== 'number' || !Number.isFinite(event.slaHours) || event.slaHours <= 0) {
+    return `approved event requires a positive slaHours (got ${JSON.stringify(event.slaHours)})`;
+  }
+  return undefined;
+}
+
+/** Internal marker: task row vanished between the guarded update and commit. */
+class TaskVanishedError extends Error {}
+
 export interface InboundDeps {
   /** HMAC secret; empty/undefined means the receiver is not configured. */
   secret: string;
+  driver: StorageDriver;
   deliveries: WebhookDeliveryRepository;
   failures: ChannelFailureRepository;
   tasks: GrowthTaskRepository;
+  /** Build repositories bound to a transaction handle (tests inject fakes). */
+  txTasks?: (tx: StorageDriver) => GrowthTaskRepository;
+  txDeliveries?: (tx: StorageDriver) => WebhookDeliveryRepository;
   now: () => string;
 }
 
@@ -203,6 +240,39 @@ export async function handleInboundZeusEvent(
 
   const desired = EVENT_TRANSITIONS[event.type];
 
+  if (event.type === 'approved') {
+    const gateReason = approvalGateViolation(event);
+    if (gateReason !== undefined) {
+      // Authenticated but semantically untrusted: never drive the state
+      // machine. A 4xx tells zeus not to retry; reconciliation is the path.
+      await deps.deliveries.record({
+        deliveryId,
+        decisionId: event.decisionId,
+        eventType: event.type,
+        signatureValid: true,
+        processingResult: 'rejected',
+        errorCode: 'INVALID_APPROVAL_GATE',
+        eventPayload: event,
+        createdAt: deps.now(),
+        updatedAt: deps.now(),
+      });
+      await deps.failures.upsert({
+        channel: 'zeus_webhook',
+        reason: 'INVALID_APPROVAL_GATE',
+        externalRef: event.decisionId,
+        retryable: false,
+        lastError: gateReason,
+        now: deps.now(),
+      });
+      return {
+        status: 422,
+        body: failureBody('INVALID_APPROVAL_GATE', gateReason, false, {
+          decisionId: event.decisionId,
+        }),
+      };
+    }
+  }
+
   if (desired === undefined) {
     // created/late: audit-only per the task brief (the orchestrator itself
     // drives signaled->deciding when it POSTs /decisions); late feeds SLA
@@ -292,26 +362,57 @@ export async function handleInboundZeusEvent(
     };
   }
 
-  const changed = await deps.tasks.setStatus(task.id, desired, now);
-  await deps.deliveries.record({
-    deliveryId,
-    decisionId: event.decisionId,
-    eventType: event.type,
-    taskId: task.id,
-    signatureValid: true,
-    processingResult: 'accepted',
-    eventPayload: event,
-    createdAt: now,
-    updatedAt: now,
-  });
-  if (changed === 0) {
-    // Task vanished between read and write: never happened in practice, but
-    // fail loud rather than silently reporting success.
+  // State transition + delivery ledger are one atomic unit (code review H4):
+  // if the ledger write fails the status update rolls back, so a zeus retry
+  // replays cleanly instead of hitting a 409 invalid-transition.
+  try {
+    await deps.driver.withTransaction(async (tx) => {
+      const txTasks = deps.txTasks?.(tx) ?? new GrowthTaskRepository(tx);
+      const txDeliveries = deps.txDeliveries?.(tx) ?? new WebhookDeliveryRepository(tx);
+      const changed = await txTasks.setStatus(task.id, desired, now);
+      if (changed === 0) throw new TaskVanishedError(task.id);
+      await txDeliveries.record({
+        deliveryId,
+        decisionId: event.decisionId,
+        eventType: event.type,
+        taskId: task.id,
+        signatureValid: true,
+        processingResult: 'accepted',
+        eventPayload: event,
+        createdAt: now,
+        updatedAt: now,
+      });
+    });
+  } catch (err) {
+    if (err instanceof TaskVanishedError) {
+      // Task vanished between read and write: never happened in practice, but
+      // fail loud rather than silently reporting success.
+      return {
+        status: 500,
+        body: failureBody(
+          'INTERNAL_ERROR',
+          `growth task ${err.message} vanished during state transition`,
+          true,
+          { taskId: err.message },
+        ),
+      };
+    }
+    // Ledger/transaction failure: nothing committed; tell zeus to retry.
+    deps.failures
+      .upsert({
+        channel: 'zeus_webhook',
+        reason: 'TRANSACTION_FAILED',
+        externalRef: event.decisionId,
+        retryable: true,
+        lastError: err instanceof Error ? err.message : 'transaction failed',
+        now: deps.now(),
+      })
+      .catch(() => undefined);
     return {
       status: 500,
       body: failureBody(
         'INTERNAL_ERROR',
-        `growth task ${task.id} vanished during state transition`,
+        'failed to persist the state transition and delivery ledger',
         true,
         { taskId: task.id },
       ),

@@ -106,4 +106,25 @@ describe('GrowthTaskRepository (sqlite, real 001 migration)', () => {
   it('returns 0 rows changed when updating a missing id', async () => {
     expect(await repo.setStatus('gt_missing', 'drafting', '2026-10-26T08:00:00.000Z')).toBe(0);
   });
+
+  it('finds a PR only inside the named repository (same number, different repos)', async () => {
+    const now = '2026-10-26T09:00:00.000Z';
+    const prRef = (repoName: string, number: number) => ({
+      platform: 'github' as const,
+      repo: repoName,
+      number,
+      url: `https://github.com/${repoName}/pull/${number}`,
+      branch: `growth-agent/${repoName.replace('/', '-')}-${number}`,
+    });
+    await repo.create({ id: 'gt_pr_a', siteId: 'bayjf.com', type: 'write' }, now);
+    await repo.patch('gt_pr_a', { prRef: prRef('owner/a', 77) }, now);
+    await repo.setStatus('gt_pr_a', 'awaiting_merge', now);
+    await repo.create({ id: 'gt_pr_b', siteId: 'bayjf.com', type: 'fix' }, now);
+    await repo.patch('gt_pr_b', { prRef: prRef('owner/b', 77) }, now);
+    await repo.setStatus('gt_pr_b', 'awaiting_merge', now);
+
+    expect((await repo.findByPrNumber('owner/a', 77))?.id).toBe('gt_pr_a');
+    expect((await repo.findByPrNumber('owner/b', 77))?.id).toBe('gt_pr_b');
+    expect(await repo.findByPrNumber('owner/c', 77)).toBeUndefined();
+  });
 });
