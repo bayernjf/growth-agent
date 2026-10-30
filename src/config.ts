@@ -16,6 +16,8 @@ export interface AppConfig {
   zeusCallbackUrl?: string | undefined;
   /** Shared secret (>=16 chars) zeus HMAC-signs outbound events with. */
   zeusWebhookSecret?: string | undefined;
+  /** Accepted clock skew (seconds) for v2 webhook timestamp; default 300. */
+  zeusWebhookMaxSkewSeconds: number;
   /** GSC read-only connector (T-B1/B2). off = deterministic offline fixture. */
   gscMode: 'off' | 'online';
   gscClientId?: string | undefined;
@@ -91,6 +93,10 @@ export function loadConfig(): AppConfig {
     zeusToken: process.env.GA_ZEUS_TOKEN || undefined,
     zeusCallbackUrl: process.env.GA_ZEUS_CALLBACK_URL || undefined,
     zeusWebhookSecret: process.env.GA_ZEUS_WEBHOOK_SECRET || undefined,
+    // v2 webhook freshness window; invalid values fall back to the 300s default.
+    zeusWebhookMaxSkewSeconds: Number.isFinite(Number(process.env.GA_ZEUS_WEBHOOK_MAX_SKEW_SECONDS))
+      ? Number(process.env.GA_ZEUS_WEBHOOK_MAX_SKEW_SECONDS)
+      : 300,
     gscMode,
     gscClientId: process.env.GA_GSC_CLIENT_ID || undefined,
     gscClientSecret: process.env.GA_GSC_CLIENT_SECRET || undefined,

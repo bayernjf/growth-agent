@@ -13,6 +13,9 @@ export function createZeusWebhookApp(deps: InboundDeps): Hono {
     const result = await handleInboundZeusEvent(deps, rawBody, {
       signature: c.req.header('x-zeus-signature') ?? null,
       deliveryId: c.req.header('x-zeus-delivery-id') ?? null,
+      webhookSignature: c.req.header('x-zeus-webhook-signature') ?? null,
+      webhookTimestamp: c.req.header('x-zeus-webhook-timestamp') ?? null,
+      webhookNonce: c.req.header('x-zeus-webhook-nonce') ?? null,
     });
     return c.json(result.body, result.status as 200 | 400 | 401 | 409 | 422 | 500 | 503);
   });
