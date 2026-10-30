@@ -11,6 +11,7 @@ import { GrowthTaskRepository } from './task/repository.js';
 import {
   ChannelFailureRepository,
   WebhookDeliveryRepository,
+  WebhookNonceRepository,
 } from './connector/zeus/webhook-repository.js';
 import { GithubWebhookRepository } from './publisher/github/webhook-repository.js';
 import { createZeusDecisionClient } from './connector/zeus/registry.js';
@@ -62,6 +63,8 @@ async function main(): Promise<void> {
       deliveries: new WebhookDeliveryRepository(driver),
       failures,
       tasks,
+      nonces: new WebhookNonceRepository(driver),
+      maxSkewSeconds: config.zeusWebhookMaxSkewSeconds,
       now: () => new Date().toISOString(),
     }),
   );

@@ -31,6 +31,7 @@ import type { GrowthTaskStatus } from '../../task/types.js';
 import {
   ChannelFailureRepository,
   WebhookDeliveryRepository,
+  WebhookNonceRepository,
 } from './webhook-repository.js';
 
 export type DecisionEventType =
@@ -66,9 +67,78 @@ export interface ZeusDecisionEvent {
   approver?: string;
 }
 
-/** Verify the `x-zeus-signature` header over the raw body (mirrors zeus signer). */
+/** Verify the legacy `x-zeus-signature` header over the raw body (mirrors zeus signer). */
 export function signZeusBody(secret: string, rawBody: string): string {
   return `sha256=${createHmac('sha256', secret).update(rawBody, 'utf8').digest('hex')}`;
+}
+
+/**
+ * v2 signature (mirrors zeus signWebhookPayload): HMAC over the canonical
+ * `<unixSeconds>\n<nonce>\n<body>`. Binds the freshness headers to the body.
+ */
+export function signZeusPayload(secret: string, timestamp: string, nonce: string, rawBody: string): string {
+  return `sha256=${createHmac('sha256', secret)
+    .update(`${timestamp}\n${nonce}\n${rawBody}`, 'utf8')
+    .digest('hex')}`;
+}
+
+export interface ZeusRequestHeaders {
+  /** Legacy body-only signature. */
+  signature: string | null;
+  deliveryId: string | null;
+  /** v2 freshness headers. */
+  webhookSignature?: string | null;
+  webhookTimestamp?: string | null;
+  webhookNonce?: string | null;
+}
+
+type SignatureVerdict =
+  | { accepted: true; legacy: boolean }
+  | { accepted: false; code: string; message: string };
+
+const NONCE_PATTERN = /^[0-9a-f]{16,128}$/;
+const TIMESTAMP_PATTERN = /^\d{10}$/;
+
+/**
+ * Verify the request authentication. Prefers v2 when its signature header is
+ * present: checks the canonical HMAC, the timestamp skew and the nonce shape;
+ * nonce replay is enforced separately by the durable nonce store. Falls back
+ * to the legacy body-only signature while zeus and receivers roll out v2.
+ */
+export function verifyZeusRequest(
+  secret: string,
+  rawBody: string,
+  headers: ZeusRequestHeaders,
+  nowEpochSeconds: number,
+  maxSkewSeconds = DEFAULT_MAX_SKEW_SECONDS,
+): SignatureVerdict {
+  if (headers.webhookSignature) {
+    const ts = headers.webhookTimestamp ?? null;
+    const nonce = headers.webhookNonce ?? null;
+    if (ts === null || nonce === null || !TIMESTAMP_PATTERN.test(ts) || !NONCE_PATTERN.test(nonce)) {
+      return { accepted: false, code: 'INVALID_SIGNATURE', message: 'malformed v2 freshness headers' };
+    }
+    const expected = Buffer.from(signZeusPayload(secret, ts, nonce, rawBody), 'utf8');
+    const received = Buffer.from(headers.webhookSignature, 'utf8');
+    const sigOk =
+      expected.length === received.length &&
+      (() => {
+        try {
+          return timingSafeEqual(expected, received);
+        } catch {
+          return false;
+        }
+      })();
+    if (!sigOk) return { accepted: false, code: 'INVALID_SIGNATURE', message: 'x-zeus-webhook-signature mismatch' };
+    const skew = Math.abs(nowEpochSeconds - Number(ts));
+    if (skew > maxSkewSeconds) {
+      return { accepted: false, code: 'STALE_TIMESTAMP', message: `webhook timestamp outside ${maxSkewSeconds}s skew window` };
+    }
+    return { accepted: true, legacy: false };
+  }
+  return verifyZeusSignature(secret, rawBody, headers.signature)
+    ? { accepted: true, legacy: true }
+    : { accepted: false, code: 'INVALID_SIGNATURE', message: 'x-zeus-signature mismatch' };
 }
 
 /**
@@ -131,6 +201,9 @@ function approvalGateViolation(event: ZeusDecisionEvent): string | undefined {
 /** Internal marker: task row vanished between the guarded update and commit. */
 class TaskVanishedError extends Error {}
 
+/** Default accepted clock skew for the v2 freshness headers (5 minutes). */
+const DEFAULT_MAX_SKEW_SECONDS = 300;
+
 export interface InboundDeps {
   /** HMAC secret; empty/undefined means the receiver is not configured. */
   secret: string;
@@ -138,6 +211,10 @@ export interface InboundDeps {
   deliveries: WebhookDeliveryRepository;
   failures: ChannelFailureRepository;
   tasks: GrowthTaskRepository;
+  /** v2 replay-defense store; legacy body-only deliveries do not need it. */
+  nonces?: WebhookNonceRepository;
+  /** Allowed timestamp skew in seconds (default 300). */
+  maxSkewSeconds?: number;
   /** Build repositories bound to a transaction handle (tests inject fakes). */
   txTasks?: (tx: StorageDriver) => GrowthTaskRepository;
   txDeliveries?: (tx: StorageDriver) => WebhookDeliveryRepository;
@@ -167,7 +244,7 @@ function failureBody(
 export async function handleInboundZeusEvent(
   deps: InboundDeps,
   rawBody: string,
-  headers: { signature: string | null; deliveryId: string | null },
+  headers: ZeusRequestHeaders,
 ): Promise<InboundResult> {
   if (deps.secret === '') {
     return {
@@ -187,19 +264,50 @@ export async function handleInboundZeusEvent(
   }
   const deliveryId = headers.deliveryId;
 
-  if (!verifyZeusSignature(deps.secret, rawBody, headers.signature)) {
+  const nowIso = deps.now();
+  const nowEpoch = Math.floor(Date.parse(nowIso) / 1000);
+  const verdict = verifyZeusRequest(deps.secret, rawBody, headers, nowEpoch, deps.maxSkewSeconds);
+  if (!verdict.accepted) {
     await deps.failures.upsert({
       channel: 'zeus_webhook',
-      reason: 'INVALID_SIGNATURE',
+      reason: verdict.code,
       ...(deliveryId !== '' ? { externalRef: deliveryId } : {}),
       retryable: false,
-      lastError: 'x-zeus-signature missing or mismatch; delivery rejected without state changes',
-      now: deps.now(),
+      lastError: verdict.message,
+      now: nowIso,
     });
     return {
       status: 401,
-      body: failureBody('INVALID_SIGNATURE', 'x-zeus-signature mismatch', false),
+      body: failureBody(verdict.code, verdict.message, false),
     };
+  }
+
+  // v2: durably claim the nonce before any state change. A replay of a
+  // captured signed request fails here even though its body still parses.
+  let webhookNonce: string | undefined;
+  if (!verdict.legacy) {
+    webhookNonce = headers.webhookNonce ?? undefined;
+    if (!deps.nonces || !webhookNonce) {
+      return {
+        status: 503,
+        body: failureBody('NONCE_STORE_UNCONFIGURED', 'v2 webhook accepted but nonce store missing', true),
+      };
+    }
+    const fresh = await deps.nonces.consume(webhookNonce, nowIso);
+    if (!fresh) {
+      await deps.failures.upsert({
+        channel: 'zeus_webhook',
+        reason: 'REPLAY_DETECTED',
+        ...(deliveryId !== '' ? { externalRef: deliveryId } : {}),
+        retryable: false,
+        lastError: 'x-zeus-webhook-nonce was already consumed',
+        now: nowIso,
+      });
+      return {
+        status: 401,
+        body: failureBody('REPLAY_DETECTED', 'webhook nonce already used', false),
+      };
+    }
   }
 
   let event: ZeusDecisionEvent;

@@ -12,13 +12,16 @@ import { GrowthTaskRepository } from '../../src/task/repository.js';
 import { createZeusWebhookApp } from '../../src/api/webhooks/zeus.js';
 import {
   signZeusBody,
+  signZeusPayload,
   verifyZeusSignature,
   type ZeusDecisionEvent,
 } from '../../src/connector/zeus/inbound.js';
 import {
   ChannelFailureRepository,
   WebhookDeliveryRepository,
+  WebhookNonceRepository,
 } from '../../src/connector/zeus/webhook-repository.js';
+import { randomBytes } from 'node:crypto';
 import type { Hono } from 'hono';
 import type { GrowthTaskStatus } from '../../src/task/types.js';
 
@@ -59,6 +62,27 @@ async function pushRaw(
   });
 }
 
+/** Push a v2 signed request with freshness headers, mirroring zeus dispatcher. */
+async function pushV2(
+  app: Hono,
+  opts: { body: string; deliveryId: string; timestamp?: string; nonce?: string; signature?: string },
+) {
+  const timestamp = opts.timestamp ?? String(Math.floor(Date.parse(NOW) / 1000));
+  const nonce = opts.nonce ?? randomBytes(16).toString('hex');
+  const signature = opts.signature ?? signZeusPayload(SECRET, timestamp, nonce, opts.body);
+  return app.request('/', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-zeus-delivery-id': opts.deliveryId,
+      'x-zeus-webhook-timestamp': timestamp,
+      'x-zeus-webhook-nonce': nonce,
+      'x-zeus-webhook-signature': signature,
+    },
+    body: opts.body,
+  });
+}
+
 let db: SqliteDriver;
 let tasks: GrowthTaskRepository;
 let deliveries: WebhookDeliveryRepository;
@@ -78,6 +102,8 @@ beforeAll(async () => {
     deliveries,
     failures,
     tasks,
+    nonces: new WebhookNonceRepository(db),
+    maxSkewSeconds: 300,
     now: () => NOW,
   });
 });
@@ -467,5 +493,69 @@ describe('inbound zeus webhook: state + ledger atomicity (H4)', () => {
     expect(await deliveries.find(deliveryId)).toMatchObject({
       processingResult: 'accepted',
     });
+  });
+});
+
+describe('inbound zeus webhook: v2 freshness signature', () => {
+  it('accepts a v2 signed approved event and drives the transition', async () => {
+    await seedTask('gt_v2_1', 'dec_v2_1', 'deciding');
+    const event = makeEvent({ decisionId: 'dec_v2_1', at: '2026-10-26T08:05:00.000Z' });
+    const body = JSON.stringify(event);
+    const res = await pushV2(app, { body, deliveryId: 'dec_v2_1:approved:2026-10-26T08:05:00.000Z' });
+    expect(res.status).toBe(200);
+    expect(await tasks.get('gt_v2_1')).toMatchObject({ status: 'drafting' });
+  });
+
+  it('rejects a timestamp outside the skew window without state change', async () => {
+    await seedTask('gt_v2_2', 'dec_v2_2', 'deciding');
+    const event = makeEvent({ decisionId: 'dec_v2_2' });
+    const body = JSON.stringify(event);
+    const stale = String(Math.floor(Date.parse(NOW) / 1000) - 600);
+    const res = await pushV2(app, { body, deliveryId: 'dec_v2_2:approved:stale', timestamp: stale });
+    expect(res.status).toBe(401);
+    expect(await res.json()).toMatchObject({ code: 'STALE_TIMESTAMP' });
+    expect(await tasks.get('gt_v2_2')).toMatchObject({ status: 'deciding' });
+  });
+
+  it('rejects a replayed nonce even when the body is otherwise valid', async () => {
+    await seedTask('gt_v2_3', 'dec_v2_3', 'deciding');
+    const event = makeEvent({ decisionId: 'dec_v2_3' });
+    const body = JSON.stringify(event);
+    const nonce = randomBytes(16).toString('hex');
+    const first = await pushV2(app, { body, deliveryId: 'dec_v2_3:approved:first', nonce });
+    expect(first.status).toBe(200);
+    // Same captured nonce, different delivery id: the replay is rejected at
+    // the nonce layer rather than acknowledged as a duplicate.
+    const replay = await pushV2(app, { body, deliveryId: 'dec_v2_3:approved:replay', nonce });
+    expect(replay.status).toBe(401);
+    expect(await replay.json()).toMatchObject({ code: 'REPLAY_DETECTED' });
+  });
+
+  it('rejects a v2 signature that does not match the canonical signed string', async () => {
+    await seedTask('gt_v2_4', 'dec_v2_4', 'deciding');
+    const event = makeEvent({ decisionId: 'dec_v2_4' });
+    const body = JSON.stringify(event);
+    const ts = String(Math.floor(Date.parse(NOW) / 1000));
+    const res = await pushV2(app, {
+      body,
+      deliveryId: 'dec_v2_4:approved:badsig',
+      timestamp: ts,
+      signature: 'sha256=deadbeef',
+    });
+    expect(res.status).toBe(401);
+    expect(await res.json()).toMatchObject({ code: 'INVALID_SIGNATURE' });
+  });
+
+  it('still accepts the legacy body-only signature during the rollout window', async () => {
+    await seedTask('gt_v2_5', 'dec_v2_5', 'deciding');
+    const event = makeEvent({ decisionId: 'dec_v2_5', at: '2026-10-26T08:10:00.000Z' });
+    const body = JSON.stringify(event);
+    const res = await pushRaw(app, {
+      body,
+      signature: signZeusBody(SECRET, body),
+      deliveryId: 'dec_v2_5:approved:2026-10-26T08:10:00.000Z',
+    });
+    expect(res.status).toBe(200);
+    expect(await tasks.get('gt_v2_5')).toMatchObject({ status: 'drafting' });
   });
 });

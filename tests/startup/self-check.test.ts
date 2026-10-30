@@ -32,6 +32,7 @@ const offlineConfig: AppConfig = {
   githubMode: 'off',
   githubBaseBranch: 'main',
   reportDir: '/tmp/reports',
+  zeusWebhookMaxSkewSeconds: 300,
 };
 
 let db: SqliteDriver;
