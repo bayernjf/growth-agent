@@ -71,16 +71,59 @@ describe('SERP registry discipline (§4.2)', () => {
 });
 
 describe('OfflineSerpProvider deterministic replay', () => {
-  it('keywordIdeas / serp / rankTrack return fixture data', async () => {
+  it('keywordIdeas returns only ideas related to the asked seed', async () => {
     const provider = new OfflineSerpProvider();
-    const ideas = await provider.keywordIdeas('audit');
-    expect(ideas[0]?.keyword).toBe('site audit checklist');
-    const results = await provider.serp('site audit checklist');
-    expect(results.map(r => r.position)).toEqual([1, 2, 3]);
-    const track = await provider.rankTrack('bayjf.com', ['site audit checklist', 'keyword with no presence']);
+    const growth = await provider.keywordIdeas('self hosted growth agent');
+    expect(growth.map(k => k.keyword)).toEqual([
+      'self hosted growth agent',
+      'self hosted growth agent setup',
+    ]);
+    const byok = await provider.keywordIdeas('byok seo automation');
+    expect(byok.map(k => k.keyword)).toEqual([
+      'byok seo automation',
+      'byok seo automation checklist',
+    ]);
+    expect(growth).not.toEqual(byok);
+  });
+
+  it('keywordIdeas returns [] (not the whole fixture) when no idea matches', async () => {
+    const provider = new OfflineSerpProvider();
+    await expect(provider.keywordIdeas('quantum underwater weaving')).resolves.toEqual([]);
+    await expect(provider.keywordIdeas('')).rejects.toMatchObject({
+      code: 'VALIDATION_FAILED',
+    });
+  });
+
+  it('serp returns the snapshot recorded for the asked query', async () => {
+    const provider = new OfflineSerpProvider();
+    const growth = await provider.serp('self hosted growth agent');
+    expect(growth).toHaveLength(3);
+    expect(growth[0]?.url).toBe('https://en.wikipedia.org/wiki/Growth_engineering');
+    // A different query replays its own recorded snapshot, never the same
+    // morphology for every query.
+    const setup = await provider.serp('self hosted growth agent setup');
+    expect(setup).not.toEqual(growth);
+  });
+
+  it('serp returns [] for an unrecorded query and honours depth', async () => {
+    const provider = new OfflineSerpProvider();
+    await expect(provider.serp('query with no fixture data')).resolves.toEqual([]);
+    const depth = await provider.serp('self hosted growth agent', { depth: 1 });
+    expect(depth).toHaveLength(1);
+    await expect(provider.serp('')).rejects.toMatchObject({ code: 'VALIDATION_FAILED' });
+  });
+
+  it('rankTrack matches the asked queries and stays honest about the domain', async () => {
+    const provider = new OfflineSerpProvider();
+    const track = await provider.rankTrack('bayjf.com', [
+      'astral developer portfolio',
+      'keyword with no presence',
+      'untracked query',
+    ]);
     expect(track).toEqual([
-      { query: 'site audit checklist', position: 1, url: 'https://bayjf.com/blog/site-audit-checklist' },
+      { query: 'astral developer portfolio', position: 2, url: 'https://bayjf.com/' },
       { query: 'keyword with no presence', position: null, url: null },
+      { query: 'untracked query', position: null, url: null },
     ]);
   });
 });
