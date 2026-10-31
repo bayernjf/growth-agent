@@ -2,6 +2,11 @@
 // Replays tests/fixtures/serp-fixture.json; zero network, zero BYOK spend.
 // Explicit offline mode — online without login/password gets the rejecting
 // provider instead, never a silent fixture fallback.
+//
+// Replay honours the input dimensions: keywordIdeas filters by the asked
+// seed, serp() returns the snapshot recorded for the asked query and
+// rankTrack matches the asked query/domain. A miss yields an empty result —
+// never another query's data and never the whole fixture dumped back.
 
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -18,7 +23,8 @@ import type {
 
 interface SerpFixture {
   keywordIdeas: KeywordIdea[];
-  serp: SerpResult[];
+  /** Recorded SERP snapshots indexed by the exact query string. */
+  serp: Record<string, SerpResult[]>;
   rankTrack: RankTrackItem[];
 }
 
@@ -29,8 +35,16 @@ const DEFAULT_FIXTURE_PATH = join(repoRoot, 'tests', 'fixtures', 'serp-fixture.j
 
 function loadFixture(path: string): SerpFixture {
   const parsed = JSON.parse(readFileSync(path, 'utf8')) as SerpFixture;
-  if (!Array.isArray(parsed.keywordIdeas) || !Array.isArray(parsed.serp) || !Array.isArray(parsed.rankTrack)) {
-    throw GrowthAgentErrors.validation('serp fixture must contain keywordIdeas[], serp[], rankTrack[]');
+  if (!Array.isArray(parsed.keywordIdeas) || !Array.isArray(parsed.rankTrack)) {
+    throw GrowthAgentErrors.validation('serp fixture must contain keywordIdeas[] and rankTrack[]');
+  }
+  const serpIsIndexed = parsed.serp !== null
+    && typeof parsed.serp === 'object'
+    && Object.values(parsed.serp).every(rows => Array.isArray(rows));
+  if (!serpIsIndexed) {
+    throw GrowthAgentErrors.validation(
+      'serp fixture must index serp snapshots by query (Record<string, SerpResult[]>)',
+    );
   }
   return parsed;
 }
@@ -48,14 +62,23 @@ export class OfflineSerpProvider implements SerpKeywordProvider {
     if (seed === '') {
       throw GrowthAgentErrors.validation('keywordIdeas: seed is required');
     }
+    // Input-dimension replay: only ideas related to the asked seed. A seed
+    // the fixture has no data for yields an empty set, never unrelated ideas.
     const needle = seed.toLowerCase();
-    const hits = this.fixture.keywordIdeas.filter(k => k.keyword.includes(needle));
-    return (hits.length > 0 ? hits : this.fixture.keywordIdeas).map(k => ({ ...k }));
+    return this.fixture.keywordIdeas
+      .filter(k => k.keyword.includes(needle))
+      .map(k => ({ ...k }));
   }
 
-  async serp(_query: string, opts?: SerpOpts): Promise<SerpResult[]> {
-    const depth = opts?.depth ?? this.fixture.serp.length;
-    return this.fixture.serp.slice(0, depth).map(r => ({ ...r }));
+  async serp(query: string, opts?: SerpOpts): Promise<SerpResult[]> {
+    if (query === '') {
+      throw GrowthAgentErrors.validation('serp: query is required');
+    }
+    // Input-dimension replay: the snapshot recorded for THIS query. An
+    // unrecorded query yields [] instead of another query's morphology.
+    const rows = this.fixture.serp[query] ?? [];
+    const depth = opts?.depth ?? rows.length;
+    return rows.slice(0, depth).map(r => ({ ...r }));
   }
 
   async rankTrack(domain: string, queries: string[]): Promise<RankTrackItem[]> {
