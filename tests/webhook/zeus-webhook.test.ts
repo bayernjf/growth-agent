@@ -418,6 +418,19 @@ describe('inbound zeus webhook: approval gate (grade >= D2 and positive slaHours
     expect(await failures.get('cf:zeus_webhook:INVALID_APPROVAL_GATE')).toBeDefined();
   });
 
+  it('rejects D0 approved events with the same 422 gate classification and audit', async () => {
+    const res = await postApproved('dec_g6', { grade: 'D0' });
+    expect(res.status).toBe(422);
+    expect(((await res.json()) as { code: string }).code).toBe('INVALID_APPROVAL_GATE');
+    expect(await tasks.get('gt_gate_dec_g6')).toMatchObject({ status: 'deciding' });
+    const deliveryId = 'dec_g6:approved:2026-10-27T08:06:00.000Z';
+    expect(await deliveries.find(deliveryId)).toMatchObject({
+      processingResult: 'rejected',
+      errorCode: 'INVALID_APPROVAL_GATE',
+    });
+    expect(await failures.get('cf:zeus_webhook:INVALID_APPROVAL_GATE')).toBeDefined();
+  });
+
   it('rejects D2 approved events with missing, zero or non-number slaHours', async () => {
     const missing = await postApproved('dec_g2', { omitSla: true });
     expect(missing.status).toBe(422);
