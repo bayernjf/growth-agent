@@ -100,26 +100,78 @@ describe('GSC registry discipline (§4.1 / growth-os provider pattern)', () => {
 });
 
 describe('OfflineGscProvider deterministic replay', () => {
-  it('replays the recorded sites and analytics rows', async () => {
+  it('replays the recorded sites and rows for the asked site/window/dimensions', async () => {
     const provider = new OfflineGscProvider();
     const sites = await provider.listSites();
     expect(sites).toEqual(fixture.sites);
     const rows = await provider.queryAnalytics({
-      siteUrl: 'https://bayjf.com/',
-      startDate: '2026-10-20',
-      endDate: '2026-10-26',
-      dimensions: ['query'],
+      // Site-config spelling ("bayjf.com") must match rows recorded as
+      // "https://bayjf.com/".
+      siteUrl: 'bayjf.com',
+      startDate: '2026-10-01',
+      endDate: '2026-10-31',
+      dimensions: ['page'],
     });
-    expect(rows).toEqual(fixture.analytics);
+    expect(rows.map(r => r.keys[0])).toEqual([
+      'https://bayjf.com/guides/legacy-guide',
+      'https://bayjf.com/blog/astro-content-pipeline',
+    ]);
   });
 
-  it('honours rowLimit and validates the input contract', async () => {
+  it('different windows replay different rows (no date-window collapse)', async () => {
+    const provider = new OfflineGscProvider();
+    const recent = await provider.queryAnalytics({
+      siteUrl: 'https://bayjf.com/',
+      startDate: '2026-09-28',
+      endDate: '2026-10-25',
+      dimensions: ['page'],
+    });
+    const prior = await provider.queryAnalytics({
+      siteUrl: 'https://bayjf.com/',
+      startDate: '2026-08-31',
+      endDate: '2026-09-27',
+      dimensions: ['page'],
+    });
+    expect(recent).not.toEqual(prior);
+    expect(recent.find(r => r.keys[0] === 'https://bayjf.com/guides/legacy-guide')?.position).toBe(9.5);
+    expect(prior.find(r => r.keys[0] === 'https://bayjf.com/guides/legacy-guide')?.position).toBe(5.0);
+  });
+
+  it('a miss on site/window/dimensions yields [] instead of misaligned rows', async () => {
+    const provider = new OfflineGscProvider();
+    await expect(
+      provider.queryAnalytics({
+        siteUrl: 'https://other.example/',
+        startDate: '2026-09-01',
+        endDate: '2026-10-31',
+        dimensions: ['page'],
+      }),
+    ).resolves.toEqual([]);
+    await expect(
+      provider.queryAnalytics({
+        siteUrl: 'https://bayjf.com/',
+        startDate: '2025-01-01',
+        endDate: '2025-12-31',
+        dimensions: ['page'],
+      }),
+    ).resolves.toEqual([]);
+    await expect(
+      provider.queryAnalytics({
+        siteUrl: 'https://bayjf.com/',
+        startDate: '2026-09-01',
+        endDate: '2026-10-31',
+        dimensions: ['query'],
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  it('honours rowLimit over the filtered set and validates the input contract', async () => {
     const provider = new OfflineGscProvider();
     const rows = await provider.queryAnalytics({
       siteUrl: 'https://bayjf.com/',
-      startDate: '2026-10-20',
-      endDate: '2026-10-26',
-      dimensions: ['query'],
+      startDate: '2026-09-01',
+      endDate: '2026-10-31',
+      dimensions: ['page'],
       rowLimit: 2,
     });
     expect(rows).toHaveLength(2);

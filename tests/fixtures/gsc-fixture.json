@@ -4,9 +4,10 @@
     { "siteUrl": "https://bayjf.com/", "permissionLevel": "siteOwner" }
   ],
   "analytics": [
-    { "keys": ["site audit checklist"], "clicks": 12, "impressions": 480, "ctr": 0.025, "position": 3.4 },
-    { "keys": ["astro content pipeline"], "clicks": 5, "impressions": 210, "ctr": 0.024, "position": 7.9 },
-    { "keys": ["vite manual chunking guide"], "clicks": 22, "impressions": 1500, "ctr": 0.015, "position": 11.2 },
-    { "keys": ["seo daily pr workflow"], "clicks": 1, "impressions": 96, "ctr": 0.010, "position": 24.6 }
+    { "siteUrl": "https://bayjf.com/", "date": "2026-09-15", "dimensions": ["page"], "keys": ["https://bayjf.com/guides/legacy-guide"], "clicks": 40, "impressions": 900, "ctr": 0.044, "position": 5.0 },
+    { "siteUrl": "https://bayjf.com/", "date": "2026-09-15", "dimensions": ["page"], "keys": ["https://bayjf.com/blog/astro-content-pipeline"], "clicks": 18, "impressions": 400, "ctr": 0.045, "position": 6.2 },
+    { "siteUrl": "https://bayjf.com/", "date": "2026-10-15", "dimensions": ["page"], "keys": ["https://bayjf.com/guides/legacy-guide"], "clicks": 15, "impressions": 600, "ctr": 0.025, "position": 9.5 },
+    { "siteUrl": "https://bayjf.com/", "date": "2026-10-15", "dimensions": ["page"], "keys": ["https://bayjf.com/blog/astro-content-pipeline"], "clicks": 20, "impressions": 420, "ctr": 0.048, "position": 6.0 },
+    { "siteUrl": "sc-domain:example.com", "date": "2026-10-15", "dimensions": ["page"], "keys": ["https://example.com/elsewhere"], "clicks": 3, "impressions": 120, "ctr": 0.025, "position": 14.0 }
   ]
 }
