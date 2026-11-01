@@ -75,6 +75,19 @@ npm run batch -- verify     --site bayjf.com
 npm run batch -- report     --site bayjf.com   # 会生成带版本号的新文件
 ```
 
+## OP-30 / OP-32 广告只读与周报 ROI（2026-11-01）
+
+- 新端口 `src/connector/ads/`（`AdsReadonlyProvider`）：`offline.ts` 确定性 fixture
+  （零网络、按日窗过滤）、`rejecting.ts`（422 `ADS_CREDENTIAL_MISSING`）、
+  `registry.ts`（`GA_ADS_MODE`，默认 off）。
+- **online 一律 fail-closed**：真实巨量引擎只读传输属 OP-31，卡广告账户授权，
+  本批不实现，且绝不静默回落 offline。
+- 周报新增可选 `ads` 段：`spendMicros/impressions/clicks/conversions/cpaMicros/roiPct`；
+  `cpaMicros` 在零转化时为 null、`roiPct` 在无 revenue 注入时为 null，渲染为 `—`。
+  **未注入 ads provider 时报告与之前逐字一致**（无新小节）。
+- ads 读取经 `CostRecorder` 记入 `api_calls`（provider 标签 `ads`，失败也记 0 单位）。
+- 测试：`tests/connector/ads-connector.test.ts`（6）+ `tests/report/weekly-ads.test.ts`（9）。
+
 ## 不可越过的边界
 
 - D2 人审下限，`slaHours=24h`；不存在 D0/D1 自动放行。
