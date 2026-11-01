@@ -266,6 +266,7 @@ describe('createDraftProvider', () => {
       sqlitePath: ':memory:',
       zeusMode: 'off',
       gscMode: 'off',
+      adsMode: 'off',
       gscTokenDir: '/tmp/tokens',
       serpMode: 'off',
       loomMode: 'off',

@@ -29,6 +29,7 @@ import { ApiCallRepository } from '../cost/api-call-repository.js';
 import { parseCostRates, Pricing } from '../cost/pricing.js';
 import { CostRecorder } from '../cost/recorder.js';
 import { createGscReadonlyProvider } from '../connector/gsc/registry.js';
+import { createAdsReadonlyProvider } from '../connector/ads/registry.js';
 import { GscSnapshotRepository } from '../connector/gsc/snapshot-repository.js';
 import { createSerpKeywordProvider } from '../connector/serp/registry.js';
 import { createZeusDecisionClient } from '../connector/zeus/registry.js';
@@ -142,6 +143,7 @@ async function main(): Promise<void> {
     );
 
     const gsc = createGscReadonlyProvider(config);
+    const ads = createAdsReadonlyProvider(config);
     const serp = createSerpKeywordProvider(config);
     const zeus = createZeusDecisionClient(config);
     const publisher = createSitePublisher(config);
@@ -235,6 +237,8 @@ async function main(): Promise<void> {
             channelFailures: failures,
             reportDir: config.reportDir,
             siteId: site.id,
+            ads,
+            adsRecorder: recorder,
           },
           day,
         );

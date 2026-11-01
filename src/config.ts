@@ -26,6 +26,11 @@ export interface AppConfig {
   gscTokenDir: string;
   /** §8 GROWTH_MASTER_KEY (AES-256 key for the sealed GSC token; env-only). */
   growthMasterKey?: string | undefined;
+  /**
+   * Ads read-only connector (OP-30). off = deterministic offline fixture;
+   * online fails closed (422) until the real transport lands in OP-31.
+   */
+  adsMode: 'off' | 'online';
   /** SERP BYOK connector (T-C1). off = deterministic offline fixture. */
   serpMode: 'off' | 'online';
   /** DataForSEO HTTP-BASIC credentials (login + password; BYOK). */
@@ -78,6 +83,7 @@ export function loadConfig(): AppConfig {
   const dbDriver = process.env.GA_DB_DRIVER === 'postgres' ? 'postgres' : 'sqlite';
   const zeusMode = process.env.GA_ZEUS_MODE === 'online' ? 'online' : 'off';
   const gscMode = process.env.GA_GSC_MODE === 'online' ? 'online' : 'off';
+  const adsMode = process.env.GA_ADS_MODE === 'online' ? 'online' : 'off';
   const serpMode = process.env.GA_SERP_MODE === 'online' ? 'online' : 'off';
   const githubMode = process.env.GA_GITHUB_MODE === 'online' ? 'online' : 'off';
   const loomMode = process.env.GA_LOOM_MODE === 'online' ? 'online' : 'off';
@@ -102,6 +108,7 @@ export function loadConfig(): AppConfig {
     gscClientSecret: process.env.GA_GSC_CLIENT_SECRET || undefined,
     gscTokenDir: process.env.GA_GSC_TOKEN_DIR ?? './data/gsc-tokens',
     growthMasterKey: process.env.GA_GROWTH_MASTER_KEY || undefined,
+    adsMode,
     serpMode,
     serpLogin: process.env.GA_SERP_DATAFORSEO_LOGIN || undefined,
     serpPassword: process.env.GA_SERP_DATAFORSEO_PASSWORD || undefined,
