@@ -267,6 +267,7 @@ describe('createDraftProvider', () => {
       zeusMode: 'off',
       gscMode: 'off',
       adsMode: 'off',
+      sentimentMode: 'off',
       gscTokenDir: '/tmp/tokens',
       serpMode: 'off',
       loomMode: 'off',
