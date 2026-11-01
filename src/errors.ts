@@ -30,6 +30,9 @@ export type GrowthAgentErrorCode =
   | 'GSC_SITE_FORBIDDEN'
   // Ads read-only connector (OP-30; same table shape as GSC).
   | 'ADS_CREDENTIAL_MISSING'
+  // Sentiment read-only connector (OP-40; same table shape as GSC).
+  | 'SENTIMENT_CREDENTIAL_MISSING'
+  | 'SENTIMENT_QUOTA'
   // Shared upstream-unavailable (§4.1 network/5xx row; reused by SERP).
   | 'UPSTREAM_UNAVAILABLE'
   // Generic non-retryable upstream HTTP error (e.g. GitHub 4xx not mapped).
@@ -104,6 +107,12 @@ export const GrowthAgentErrors = {
   /** online ads mode selected without an authorized ad account (422, non-retryable). */
   adsCredentialMissing: (message: string) =>
     new GrowthAgentError('ADS_CREDENTIAL_MISSING', message, 422),
+  /** online sentiment mode selected without per-source keys (422, non-retryable). */
+  sentimentCredentialMissing: (message: string) =>
+    new GrowthAgentError('SENTIMENT_CREDENTIAL_MISSING', message, 422),
+  /** sentiment source rate-limited (429, retryable). */
+  sentimentQuota: (message: string, details?: unknown) =>
+    new GrowthAgentError('SENTIMENT_QUOTA', message, 429, true, details),
   /** Network error / upstream 5xx for GSC and SERP connectors (503, retryable). */
   upstreamUnavailable: (message: string, details?: unknown) =>
     new GrowthAgentError('UPSTREAM_UNAVAILABLE', message, 503, true, details),

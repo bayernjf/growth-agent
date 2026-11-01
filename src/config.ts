@@ -31,6 +31,11 @@ export interface AppConfig {
    * online fails closed (422) until the real transport lands in OP-31.
    */
   adsMode: 'off' | 'online';
+  /**
+   * Sentiment read-only connector (OP-40). off = deterministic offline fixture;
+   * online fails closed (422) until the real public-source transports land.
+   */
+  sentimentMode: 'off' | 'online';
   /** SERP BYOK connector (T-C1). off = deterministic offline fixture. */
   serpMode: 'off' | 'online';
   /** DataForSEO HTTP-BASIC credentials (login + password; BYOK). */
@@ -84,6 +89,7 @@ export function loadConfig(): AppConfig {
   const zeusMode = process.env.GA_ZEUS_MODE === 'online' ? 'online' : 'off';
   const gscMode = process.env.GA_GSC_MODE === 'online' ? 'online' : 'off';
   const adsMode = process.env.GA_ADS_MODE === 'online' ? 'online' : 'off';
+  const sentimentMode = process.env.GA_SENTIMENT_MODE === 'online' ? 'online' : 'off';
   const serpMode = process.env.GA_SERP_MODE === 'online' ? 'online' : 'off';
   const githubMode = process.env.GA_GITHUB_MODE === 'online' ? 'online' : 'off';
   const loomMode = process.env.GA_LOOM_MODE === 'online' ? 'online' : 'off';
@@ -109,6 +115,7 @@ export function loadConfig(): AppConfig {
     gscTokenDir: process.env.GA_GSC_TOKEN_DIR ?? './data/gsc-tokens',
     growthMasterKey: process.env.GA_GROWTH_MASTER_KEY || undefined,
     adsMode,
+    sentimentMode,
     serpMode,
     serpLogin: process.env.GA_SERP_DATAFORSEO_LOGIN || undefined,
     serpPassword: process.env.GA_SERP_DATAFORSEO_PASSWORD || undefined,
