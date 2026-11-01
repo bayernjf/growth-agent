@@ -28,6 +28,8 @@ export type GrowthAgentErrorCode =
   | 'GSC_SCOPE_INSUFFICIENT'
   | 'GSC_QUOTA'
   | 'GSC_SITE_FORBIDDEN'
+  // Ads read-only connector (OP-30; same table shape as GSC).
+  | 'ADS_CREDENTIAL_MISSING'
   // Shared upstream-unavailable (§4.1 network/5xx row; reused by SERP).
   | 'UPSTREAM_UNAVAILABLE'
   // Generic non-retryable upstream HTTP error (e.g. GitHub 4xx not mapped).
@@ -99,6 +101,9 @@ export const GrowthAgentErrors = {
   /** site not shared with this OAuth client / deleted: flag site disabled (403). */
   gscSiteForbidden: (message: string, details?: unknown) =>
     new GrowthAgentError('GSC_SITE_FORBIDDEN', message, 403, false, details),
+  /** online ads mode selected without an authorized ad account (422, non-retryable). */
+  adsCredentialMissing: (message: string) =>
+    new GrowthAgentError('ADS_CREDENTIAL_MISSING', message, 422),
   /** Network error / upstream 5xx for GSC and SERP connectors (503, retryable). */
   upstreamUnavailable: (message: string, details?: unknown) =>
     new GrowthAgentError('UPSTREAM_UNAVAILABLE', message, 503, true, details),
