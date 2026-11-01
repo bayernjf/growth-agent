@@ -9,6 +9,8 @@ import { ApiCallRepository } from '../cost/api-call-repository.js';
 import type { CostRecorder } from '../cost/recorder.js';
 import type { AdsReadonlyProvider } from '../connector/ads/types.js';
 import { GscSnapshotRepository } from '../connector/gsc/snapshot-repository.js';
+import { SentimentSnapshotRepository } from '../connector/sentiment/snapshot-repository.js';
+import { scoreSentimentAlerts, type SentimentAlert } from '../scheduler/sentiment.js';
 import {
   ChannelFailureRepository,
   WebhookDeliveryRepository,
@@ -36,6 +38,11 @@ export interface WeeklyReportDeps {
   ads?: AdsReadonlyProvider | undefined;
   /** Ledger wrapper for the ads report call (§11.1 provider tag `ads`). */
   adsRecorder?: CostRecorder | undefined;
+  /**
+   * Sentiment snapshot repository (OP-40/42). Absent = the report keeps its
+   * pre-sentiment shape byte for byte (no sentiment alerts section at all).
+   */
+  sentiment?: SentimentSnapshotRepository | undefined;
   /**
    * Revenue attributable to the week, in integer micro-USD. Absent (or
    * resolving to null) means ROI cannot be computed and renders as "—".
@@ -72,6 +79,8 @@ export interface WeeklyReport {
   costByProvider: Array<{ provider: string; calls: number; costMicros: number }>;
   /** Present only when an ads provider was injected (OP-32). */
   ads?: WeeklyAdsSummary;
+  /** Negative-mention alerts (OP-42); only when a sentiment repo was injected. */
+  sentimentAlerts?: SentimentAlert[];
   rejectionReasons: Array<{ reason: string; count: number }>;
   channelFailures: Array<{ channel: string; reason: string; attempts: number; lastAt: string }>;
 }
@@ -136,6 +145,13 @@ export async function buildWeeklyReport(
         ...(deps.revenueMicros !== undefined ? { revenueMicros: deps.revenueMicros } : {}),
       });
 
+  // OP-42: negative mentions become weekly-report alerts; only computed when a
+  // sentiment repo is injected, so every other caller keeps the pre-sentiment
+  // report shape byte for byte.
+  const sentimentAlerts = deps.sentiment === undefined
+    ? undefined
+    : scoreSentimentAlerts(await deps.sentiment.listNegative(startDate, endDate));
+
   return {
     weekStart: startDate,
     weekEnd: endDate,
@@ -155,6 +171,7 @@ export async function buildWeeklyReport(
       costMicros: r.costMicros,
     })),
     ...(ads !== undefined ? { ads } : {}),
+    ...(sentimentAlerts !== undefined ? { sentimentAlerts } : {}),
     rejectionReasons: [...reasonCounts.entries()]
       .map(([reason, count]) => ({ reason, count }))
       .sort((a, b) => b.count - a.count),
@@ -297,6 +314,16 @@ export function renderWeeklyMarkdown(r: WeeklyReport): string {
           `- Conversions: ${r.ads.conversions}`,
           `- CPA: ${r.ads.cpaMicros === null ? '— (no conversions this week)' : `${r.ads.cpaMicros} micros`}`,
           `- ROI: ${r.ads.roiPct === null ? '— (no revenue source configured)' : `${r.ads.roiPct.toFixed(1)}%`}`,
+          '',
+        ]),
+    // OP-42: rendered only when a sentiment repo was injected.
+    ...(r.sentimentAlerts === undefined
+      ? []
+      : [
+          '## Sentiment alerts (negative mentions)',
+          ...(r.sentimentAlerts.length > 0
+            ? r.sentimentAlerts.map(a => `- [${a.keyword}] ${a.title} (${a.source}, ${a.date})`)
+            : ['- No negative mentions this week.']),
           '',
         ]),
     '## Zeus human-review outcomes',

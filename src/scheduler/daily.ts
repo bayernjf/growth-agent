@@ -13,6 +13,9 @@
 
 import { GscSnapshotRepository } from '../connector/gsc/snapshot-repository.js';
 import type { GscReadonlyProvider, GscRow } from '../connector/gsc/types.js';
+import { SentimentSnapshotRepository } from '../connector/sentiment/snapshot-repository.js';
+import type { SentimentProvider } from '../connector/sentiment/types.js';
+import { scoreSentimentAlerts, type SentimentAlert } from './sentiment.js';
 import type { SerpKeywordProvider } from '../connector/serp/types.js';
 import type { GscSnapshotRow } from '../connector/gsc/snapshot-repository.js';
 import type { ZeusDecisionClient } from '../connector/zeus/types.js';
@@ -35,6 +38,9 @@ export interface DailyDeps {
   domain: string;
   gsc: GscReadonlyProvider;
   snapshots: GscSnapshotRepository;
+  /** Sentiment provider (W6 / OP-40). Absent = no sentiment snapshot/alert. */
+  sentiment?: SentimentProvider | undefined;
+  sentimentSnapshots?: SentimentSnapshotRepository | undefined;
   serp: SerpKeywordProvider;
   zeus: ZeusDecisionClient;
   tasks: GrowthTaskRepository;
@@ -55,6 +61,8 @@ export interface DailyRunResult {
   submitted: Array<{ taskId: string; kind: GrowthTaskType; query: string; decisionId: string }>;
   deferredWrites: WriteCandidate[];
   deferredFixes: FixCandidate[];
+  /** Negative-mention alerts (OP-41); only when a sentiment provider is wired. */
+  sentimentAlerts?: SentimentAlert[];
 }
 
 function defaultIdFactory(day: Date, kind: GrowthTaskType, index: number): string {
@@ -141,6 +149,31 @@ export class DailyScriptRunner {
       },
     );
     await d.snapshots.upsert(toSnapshotRows(d.siteId, recent.end, recentRows));
+
+    // 1b. Sentiment snapshot + negative alert scoring (W6 / OP-40/41): pull the
+    // day's public mentions, persist them, then score alerts. Optional — no
+    // provider leaves the section empty.
+    let sentimentAlerts: SentimentAlert[] = [];
+    if (d.sentiment !== undefined && d.sentimentSnapshots !== undefined) {
+      const today = isoDate(day);
+      const mentions = await d.recorder.measure(
+        { provider: 'sentiment', method: 'GET', endpoint: 'sentiment:mentions' },
+        async () => {
+          const rows = await d.sentiment!.querySentiment({ startDate: today, endDate: today });
+          return { data: rows, units: rows.length, httpStatus: 200 };
+        },
+      );
+      await d.sentimentSnapshots.upsert(mentions.map((m) => ({
+        keyword: m.keyword,
+        source: m.source,
+        date: m.date,
+        title: m.title,
+        url: m.url,
+        sentiment: m.sentiment,
+        metricValue: m.metricValue,
+      })));
+      sentimentAlerts = scoreSentimentAlerts(await d.sentimentSnapshots.list(today, today));
+    }
 
     // 2. rankTrack for watch queries.
     const rankTrack = await d.recorder.measure(
@@ -251,6 +284,7 @@ export class DailyScriptRunner {
       submitted,
       deferredWrites: selection.deferredWrites,
       deferredFixes: selection.deferredFixes,
+      ...(d.sentiment !== undefined ? { sentimentAlerts } : {}),
     };
   }
 }
