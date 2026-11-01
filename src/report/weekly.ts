@@ -6,6 +6,8 @@
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ApiCallRepository } from '../cost/api-call-repository.js';
+import type { CostRecorder } from '../cost/recorder.js';
+import type { AdsReadonlyProvider } from '../connector/ads/types.js';
 import { GscSnapshotRepository } from '../connector/gsc/snapshot-repository.js';
 import {
   ChannelFailureRepository,
@@ -27,6 +29,30 @@ export interface WeeklyReportDeps {
   reportDir: string;
   /** Site id for the snapshot ranking section; undefined aggregates all. */
   siteId?: string;
+  /**
+   * Ads read-only provider (OP-30/OP-32). Absent = the report keeps its
+   * pre-OP-32 shape byte for byte (no ads section at all).
+   */
+  ads?: AdsReadonlyProvider | undefined;
+  /** Ledger wrapper for the ads report call (§11.1 provider tag `ads`). */
+  adsRecorder?: CostRecorder | undefined;
+  /**
+   * Revenue attributable to the week, in integer micro-USD. Absent (or
+   * resolving to null) means ROI cannot be computed and renders as "—".
+   */
+  revenueMicros?: ((startIso: string, endIso: string) => Promise<number | null>) | undefined;
+}
+
+/** Paid-ads aggregates for the week (OP-32). Micro-USD, like the ledger. */
+export interface WeeklyAdsSummary {
+  spendMicros: number;
+  impressions: number;
+  clicks: number;
+  conversions: number;
+  /** Spend per conversion; null when the week had zero conversions. */
+  cpaMicros: number | null;
+  /** (revenue - spend) / spend * 100, one decimal; null without a revenue source. */
+  roiPct: number | null;
 }
 
 export interface WeeklyReport {
@@ -44,6 +70,8 @@ export interface WeeklyReport {
   declinedPages: number;
   costMicros: number;
   costByProvider: Array<{ provider: string; calls: number; costMicros: number }>;
+  /** Present only when an ads provider was injected (OP-32). */
+  ads?: WeeklyAdsSummary;
   rejectionReasons: Array<{ reason: string; count: number }>;
   channelFailures: Array<{ channel: string; reason: string; attempts: number; lastAt: string }>;
 }
@@ -98,6 +126,16 @@ export async function buildWeeklyReport(
     : await deps.snapshots.list(deps.siteId, startDate, endDate);
   const position = aggregatePositionMovement(snapshots);
 
+  // OP-32: only computed when an ads provider is injected, so every other
+  // caller keeps the pre-ads report shape.
+  const ads = deps.ads === undefined
+    ? undefined
+    : await buildWeeklyAdsSummary(deps.ads, deps.adsRecorder, startDate, endDate, {
+        startIso,
+        endIso,
+        ...(deps.revenueMicros !== undefined ? { revenueMicros: deps.revenueMicros } : {}),
+      });
+
   return {
     weekStart: startDate,
     weekEnd: endDate,
@@ -116,6 +154,7 @@ export async function buildWeeklyReport(
       calls: r.calls,
       costMicros: r.costMicros,
     })),
+    ...(ads !== undefined ? { ads } : {}),
     rejectionReasons: [...reasonCounts.entries()]
       .map(([reason, count]) => ({ reason, count }))
       .sort((a, b) => b.count - a.count),
@@ -128,8 +167,60 @@ export async function buildWeeklyReport(
   };
 }
 
-function rejectionReasonOf(payload: unknown): string {
-  if (payload === null || typeof payload !== 'object') return 'unknown';
+/**
+ * OP-32: aggregate the week's paid-ads rows. Money stays in integer micros;
+ * CPA is null without conversions and ROI is null without a revenue source —
+ * both render as "—" rather than a fabricated number.
+ */
+async function buildWeeklyAdsSummary(
+  ads: AdsReadonlyProvider,
+  recorder: CostRecorder | undefined,
+  startDate: string,
+  endDate: string,
+  opts: {
+    startIso: string;
+    endIso: string;
+    revenueMicros?: (startIso: string, endIso: string) => Promise<number | null>;
+  },
+): Promise<WeeklyAdsSummary> {
+  const fetchRows = (): ReturnType<AdsReadonlyProvider['queryReport']> =>
+    ads.queryReport({ startDate, endDate });
+  // §11.1: the ads read is a metered external call — record it (failures too)
+  // under the `ads` provider tag, exactly like the GSC/SERP reads.
+  const rows = recorder === undefined
+    ? await fetchRows()
+    : await recorder.measure(
+        { provider: 'ads', method: 'GET', endpoint: 'ads:report' },
+        async () => {
+          const data = await fetchRows();
+          return { data, units: data.length };
+        },
+      );
+
+  let spendMicros = 0;
+  let impressions = 0;
+  let clicks = 0;
+  let conversions = 0;
+  for (const row of rows) {
+    spendMicros += row.spendMicros;
+    impressions += row.impressions;
+    clicks += row.clicks;
+    conversions += row.conversions;
+  }
+
+  const cpaMicros = conversions > 0 ? Math.round(spendMicros / conversions) : null;
+  const revenue = opts.revenueMicros === undefined
+    ? null
+    : await opts.revenueMicros(opts.startIso, opts.endIso);
+  const roiPct =
+    revenue !== null && spendMicros > 0
+      ? Math.round(((revenue - spendMicros) / spendMicros) * 1000) / 10
+      : null;
+
+  return { spendMicros, impressions, clicks, conversions, cpaMicros, roiPct };
+}
+
+function rejectionReasonOf(payload: unknown): string {  if (payload === null || typeof payload !== 'object') return 'unknown';
   const p = payload as Record<string, unknown>;
   const detail = (p.detail ?? {}) as Record<string, unknown>;
   const candidate = detail.outcome ?? detail.reason ?? p.outcome ?? p.reason;
@@ -194,6 +285,20 @@ export function renderWeeklyMarkdown(r: WeeklyReport): string {
       ? r.costByProvider.map(c => `  - ${c.provider}: ${c.costMicros} micros across ${c.calls} calls`)
       : ['  - (no recorded calls)']),
     '',
+    // OP-32: rendered only when the caller injected an ads provider, so the
+    // pre-ads report stays byte-identical for every other caller.
+    ...(r.ads === undefined
+      ? []
+      : [
+          '## Ads / ROI (paid channels, micros USD)',
+          `- Spend: ${r.ads.spendMicros} micros`,
+          `- Impressions: ${r.ads.impressions}`,
+          `- Clicks: ${r.ads.clicks}`,
+          `- Conversions: ${r.ads.conversions}`,
+          `- CPA: ${r.ads.cpaMicros === null ? '— (no conversions this week)' : `${r.ads.cpaMicros} micros`}`,
+          `- ROI: ${r.ads.roiPct === null ? '— (no revenue source configured)' : `${r.ads.roiPct.toFixed(1)}%`}`,
+          '',
+        ]),
     '## Zeus human-review outcomes',
     ...(r.rejectionReasons.length > 0
       ? r.rejectionReasons.map(x => `- rejected: ${x.reason} (${x.count})`)
