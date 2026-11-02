@@ -212,25 +212,38 @@ export async function runProductionSweep(
       },
     );
 
-    const result = await runProductionBatch(
-      {
-        tasks: deps.tasks,
-        publisher: deps.publisher,
-        recorder: deps.recorder,
-        now: nowIso,
-      },
-      {
+    // Per-task fault isolation: an external publish failure must not kill the
+    // sweep or wedge the task. The batch leaves the task in drafting on error,
+    // so the next sweep retries it; the failure reason lands in the item.
+    let result: Awaited<ReturnType<typeof runProductionBatch>>;
+    try {
+      result = await runProductionBatch(
+        {
+          tasks: deps.tasks,
+          publisher: deps.publisher,
+          recorder: deps.recorder,
+          now: nowIso,
+        },
+        {
+          taskId: task.id,
+          draft: obtained.draft,
+          serp,
+          gscPages,
+          existingOpenChanges: await collectOpenChanges(deps.tasks, task.id),
+          publishedContent,
+          ...(keywordVolume !== undefined ? { keywordVolume } : {}),
+          changeSummary: obtained.changeSummary,
+          repoFullName: deps.repoFullName,
+        },
+      );
+    } catch (error) {
+      items.push({
         taskId: task.id,
-        draft: obtained.draft,
-        serp,
-        gscPages,
-        existingOpenChanges: await collectOpenChanges(deps.tasks, task.id),
-        publishedContent,
-        ...(keywordVolume !== undefined ? { keywordVolume } : {}),
-        changeSummary: obtained.changeSummary,
-        repoFullName: deps.repoFullName,
-      },
-    );
+        outcome: 'failed',
+        reason: error instanceof Error ? error.message : String(error),
+      });
+      continue;
+    }
 
     items.push({
       taskId: task.id,

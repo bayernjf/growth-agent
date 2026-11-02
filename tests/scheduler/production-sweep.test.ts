@@ -331,4 +331,38 @@ describe('runProductionSweep (§5.C driver)', () => {
 
     expect(result.items).toEqual([]);
   });
+
+  it('isolates a publish failure per task and the next sweep retries it to pr_opened', async () => {
+    await seedSnapshot([{ page: FIX_PAGE, impressions: 80, position: 20 }]);
+    await createTask('gt_fix_retry', 'fix', fixContext());
+    dropDraft('gt_fix_retry', fixDraftFile);
+
+    class FailOncePublisher extends FakeSitePublisher {
+      private failuresLeft = 1;
+      override async openChange(input: Parameters<FakeSitePublisher['openChange']>[0]) {
+        if (this.failuresLeft > 0) {
+          this.failuresLeft -= 1;
+          throw new Error('github 503: Service Unavailable');
+        }
+        return super.openChange(input);
+      }
+    }
+    const failOnce = new FailOncePublisher();
+
+    // First sweep: the external publish fails. The task must stay retryable in
+    // drafting (never wedged), the reason is reported, and the sweep survives.
+    const first = await runProductionSweep(depsFor({ publisher: failOnce }));
+    expect(first.items).toHaveLength(1);
+    expect(first.items[0]?.outcome).toBe('failed');
+    expect(first.items[0]?.reason).toMatch(/github 503/);
+    expect((await tasks.get('gt_fix_retry'))?.status).toBe('drafting');
+
+    // Restart (= the next scheduled sweep): the batch replays end-to-end and
+    // the idempotent publisher returns the same change — no duplicate PR.
+    const second = await runProductionSweep(depsFor({ publisher: failOnce }));
+    expect(second.items).toHaveLength(1);
+    expect(second.items[0]?.outcome).toBe('pr_opened');
+    expect((await tasks.get('gt_fix_retry'))?.status).toBe('pr_opened');
+    expect(failOnce.openedChanges()).toHaveLength(1);
+  });
 });
