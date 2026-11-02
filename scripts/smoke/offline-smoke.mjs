@@ -146,9 +146,15 @@ async function postZeusEvent(decisionId, type, when) {
   const body = JSON.stringify({
     type, decisionId, at: when.toISOString(), domain: 'growth-agent', intent: 'growth',
     grade: 'D2', mode: 'human', status: 'decided', ruleId: 'd2-org', outcome: 'approved',
+    // Contract fix: inbound.ts requires a positive slaHours on approved events
+    // (mirrors the offline D2 rule in connector/zeus/offline.ts).
+    slaHours: 24,
   });
   const app = createZeusWebhookApp({
     secret: SECRET,
+    // H4 made the transition + delivery ledger one atomic transaction, so the
+    // handler hard-requires a StorageDriver — without it every approved event 500s.
+    driver,
     tasks, deliveries: zeusDeliveries, failures: channelFailures,
     now: () => when.toISOString(),
   });
