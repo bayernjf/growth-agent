@@ -39,11 +39,13 @@ State of growth-agent as of 2026-10-28.
 
 ## 已知缺口（按优先级）
 
-1. **零凭据离线模式产不出候选**。`tests/fixtures/{gsc,serp}-fixture.json` 的回放忽略
-   输入：GSC 不论请求 `page` 还是 `query` 维度都返回同一批 query 维行；SERP 对任何
-   query 返回同一份结果且自有域名恒在 #1。结果：fresh install 的 `daily` 永远
-   0 write / 0 fix，`batch` 服务空转。修法要在 fixture/replay 层做（按维度与 query
-   取数、并为两个 GSC 窗口录不同的行），不是改评分阈值。
+1. ~~零凭据离线模式产不出候选~~ **已修（`feature/offline-replay`，未推送）**。
+   根因：回放忽略输入——GSC 不论 `page`/`query` 维度都返回同一批 query 维行且两个
+   窗口相同；SERP 对任何 query 返回同一份结果。修复：fixture 按维度+窗口结构化
+   （`analytics.query` / `analytics.page.recent|prior`，窗口按 startDate 中点选桶），
+   SERP 按 query 录制结果集。离线 `daily --day 2026-10-26` 实测产出
+   1 write（self hosted growth agent）+ 1 fix（/guides/vite-manual-chunking）；
+   `check:all` 与 `smoke:offline` 全绿（36 文件 / 334 测试）。
 2. **GSC T-B4 wire 形状未经真实属性验证**。12 个契约级假上游用例覆盖了刷新、401
    重试、§4.1 映射、截断保护，但字段名只按 v3 文档写。真凭据首跑要先核对。
 3. **SERP T-C2**：`src/connector/serp/http.ts` 自述未用真 key 验证过 wire。
@@ -58,7 +60,8 @@ State of growth-agent as of 2026-10-28.
 
 1. 用真实 GSC 属性跑一次 `npm run batch -- daily --site bayjf.com`，核对 T-B4 的
    wire 形状（先只开 `GA_GSC_MODE=online`，SERP 保持 off）。
-2. 修离线 fixture/replay 让它能产 1 write + 1 fix，使零凭据安装能自证。
+2. ~~修离线 fixture/replay 让它能产 1 write + 1 fix~~ 已在 `feature/offline-replay`
+   完成（复现测试 90efddd + 修复 4eedb78），待走 PR 门禁合并。
 3. 配 `GA_SERP_MODE=online`（DataForSEO BYOK，会产生真实费用）打通 write 候选。
 4. 开 `GA_GITHUB_MODE=online` + webhook secret，让 production 打真 PR（人工合并）。
 
