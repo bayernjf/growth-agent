@@ -117,4 +117,35 @@ describe('runVerificationBatch (§5.D)', () => {
     expect(task?.verifyChecks).toHaveLength(1);
     await db.close();
   });
+
+  // Review F-06: a GSC throw for one task previously propagated out of the
+  // batch and silently skipped every remaining verification of the day.
+  it('isolates a per-task GSC failure — later tasks are still checked (F-06)', async () => {
+    const { db, tasks } = await setup();
+    await tasks.create({ id: 'gt_boom', siteId: 's', type: 'fix', status: 'verifying' }, MERGED_25H_AGO);
+    await tasks.create({ id: 'gt_ok', siteId: 's', type: 'fix', status: 'verifying' }, MERGED_25H_AGO);
+
+    // First GSC call (gt_boom) throws; subsequent calls (gt_ok) succeed.
+    let gscCalls = 0;
+    const flakyGsc: GscReadonlyProvider = {
+      name: 'gsc-flaky',
+      mode: 'offline',
+      listSites: async () => [],
+      queryAnalytics: async () => {
+        gscCalls += 1;
+        if (gscCalls === 1) throw new Error('UPSTREAM_UNAVAILABLE: gsc exploded');
+        return [{ keys: ['/drop'], clicks: 1, impressions: 500, ctr: 0.01, position: 12 }];
+      },
+    };
+
+    const result = await runVerificationBatch(depsFor(tasks, flakyGsc, DAY1.toISOString()), DAY1);
+
+    expect(result.failed).toEqual([
+      { taskId: 'gt_boom', reason: 'UPSTREAM_UNAVAILABLE: gsc exploded' },
+    ]);
+    expect(result.checked).toEqual([{ taskId: 'gt_ok', outcome: 'pending' }]);
+    // The failed task stays verifying (retryable tomorrow), not wedged/done.
+    expect((await tasks.get('gt_boom'))?.status).toBe('verifying');
+    await db.close();
+  });
 });

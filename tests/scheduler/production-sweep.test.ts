@@ -74,6 +74,24 @@ class UnavailableDrafts implements DraftProvider {
   }
 }
 
+/** F-06: draft source that throws for one task and delegates to the inbox otherwise. */
+class FlakyDrafts implements DraftProvider {
+  readonly name = 'draft-flaky';
+  readonly mode = 'inbox' as const;
+
+  constructor(
+    private readonly failTaskId: string,
+    private readonly inner: DraftProvider,
+  ) {}
+
+  async obtain(input: DraftRequest): Promise<DraftOutcome> {
+    if (input.taskId === this.failTaskId) {
+      throw new Error('UPSTREAM_UNAVAILABLE: draft chain exploded');
+    }
+    return this.inner.obtain(input);
+  }
+}
+
 const fixDraftFile = {
   slug: 'guides/legacy-guide',
   title: 'Legacy guide (refreshed)',
@@ -240,6 +258,41 @@ describe('runProductionSweep (§5.C driver)', () => {
     const task = await tasks.get('gt_write');
     expect(task?.status).toBe('pr_opened');
     expect(task?.context?.publishedUrl).toBe('https://bayjf.com/guides/how-to-bake-bread');
+  });
+
+  // Review F-06: before the fix, an exception from drafts.obtain / SERP /
+  // GSC for one task propagated out of runProductionSweep and silently skipped
+  // every remaining drafting task of the day.
+  it('isolates a per-task draft failure — the rest of the sweep still runs (F-06)', async () => {
+    await seedSnapshot([{ page: HOME_PAGE, impressions: 5000, position: 1 }]);
+    await createTask('gt_boom', 'write', {
+      query: 'exploding topic',
+      angle: 'daily write candidate',
+    });
+    await createTask('gt_ok', 'write', {
+      query: 'how to bake bread',
+      angle: 'daily write candidate: informational demand with no top-10 coverage',
+    });
+    dropDraft('gt_ok', writeDraftFile);
+
+    const result = await runProductionSweep(
+      depsFor({
+        drafts: new FlakyDrafts('gt_boom', new InboxDraftProvider(inboxDir)),
+        serp: new FakeSerp({ 'how to bake bread': 800 }),
+      }),
+    );
+
+    expect(result.items).toEqual([
+      expect.objectContaining({
+        taskId: 'gt_boom',
+        outcome: 'failed',
+        reason: expect.stringContaining('UPSTREAM_UNAVAILABLE'),
+      }),
+      expect.objectContaining({ taskId: 'gt_ok', outcome: 'pr_opened' }),
+    ]);
+    // The failed task stays drafting (retryable next sweep), not wedged.
+    expect((await tasks.get('gt_boom'))?.status).toBe('drafting');
+    expect((await tasks.get('gt_ok'))?.status).toBe('pr_opened');
   });
 
   it('skips a write task with no SERP volume instead of burning the one rework', async () => {
