@@ -10,7 +10,9 @@ import { Pricing } from '../../src/cost/pricing.js';
 import { CostRecorder } from '../../src/cost/recorder.js';
 import { OfflineZeusClient } from '../../src/connector/zeus/offline.js';
 import { DailyScriptRunner } from '../../src/scheduler/daily.js';
+import { reconcileDecisions } from '../../src/reconcile/reconcile.js';
 import type { GscReadonlyProvider, GscRow } from '../../src/connector/gsc/types.js';
+import type { ZeusDecisionClient } from '../../src/connector/zeus/types.js';
 import type { SerpKeywordProvider, KeywordIdea, RankTrackItem, SerpResult } from '../../src/connector/serp/types.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -124,5 +126,76 @@ describe('DailyScriptRunner (§5.A)', () => {
     const result = await ctx.runner.run(DAY);
     expect(result.ran).toBe(false);
     expect(result.reason).toBe('already_ran_today');
+  });
+
+  // Review F-07: previously a submit failure for candidate #2 aborted the
+  // loop, leaving it in `signaled` forever (same-day re-run idempotency-
+  // blocked, reconcile only handled `deciding`). Now the failure is isolated
+  // per candidate AND reconcile resubmits the stranded task at next startup.
+  it('isolates a submit failure and reconcile revives the stranded signaled task (F-07)', async () => {
+    // Fresh in-memory DB: the shared one already ran DAY above.
+    const localDb = new SqliteDriver(':memory:');
+    await migrateUp(localDb);
+    const localTasks = new GrowthTaskRepository(localDb);
+    const localSnapshots = new GscSnapshotRepository(localDb);
+    const localApiCalls = new ApiCallRepository(localDb);
+    const localRecorder = new CostRecorder(localApiCalls, new Pricing(), () => DAY.toISOString());
+
+    // First submitDecision (the write candidate) explodes; the fix succeeds.
+    // NOTE: spread-copying a class instance drops prototype methods — delegate.
+    let submitCalls = 0;
+    const inner = new OfflineZeusClient();
+    const flakyZeus: ZeusDecisionClient = {
+      name: inner.name,
+      mode: inner.mode,
+      submitDecision: async input => {
+        submitCalls += 1;
+        if (submitCalls === 1) throw new Error('UPSTREAM_UNAVAILABLE: zeus exploded');
+        return inner.submitDecision(input);
+      },
+      getDecisionAudit: id => inner.getDecisionAudit(id),
+      getPolicies: () => inner.getPolicies(),
+      ping: () => inner.ping(),
+      buildSubscriptionPayload: args => inner.buildSubscriptionPayload(args),
+      startupSelfCheck: () => inner.startupSelfCheck(),
+    };
+
+    const localRunner = new DailyScriptRunner({
+      siteId: SITE,
+      domain: 'example.com',
+      gsc: stubGsc,
+      snapshots: localSnapshots,
+      serp: stubSerp,
+      zeus: flakyZeus,
+      tasks: localTasks,
+      recorder: localRecorder,
+      watchQueries: ['how to bake bread'],
+      keywordSeeds: ['bread'],
+      now: () => DAY,
+    });
+
+    const result = await localRunner.run(DAY);
+    expect(result.ran).toBe(true);
+    expect(result.submitted).toHaveLength(1);
+    expect(result.submitted[0]?.kind).toBe('fix');
+    expect(result.submitFailures).toHaveLength(1);
+    const strandedId = result.submitFailures[0]!.taskId;
+    expect((await localTasks.get(strandedId))?.status).toBe('signaled');
+
+    // Same-day re-run is still idempotency-blocked...
+    const rerun = await localRunner.run(DAY);
+    expect(rerun.ran).toBe(false);
+
+    // ...but startup reconcile resubmits the stranded task to zeus.
+    const summary = await reconcileDecisions({
+      tasks: localTasks,
+      zeus: new OfflineZeusClient(),
+      now: () => DAY.toISOString(),
+    });
+    expect(summary.resubmitted).toBe(1);
+    const revived = await localTasks.get(strandedId);
+    expect(revived?.status).toBe('deciding');
+    expect(revived?.zeusDecisionId).toMatch(/^dec_offline_/);
+    await localDb.close();
   });
 });
