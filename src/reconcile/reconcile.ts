@@ -26,6 +26,10 @@ export interface ReconcileSummary {
   drifted: number;
   /** Tasks missing a zeus decision id (cannot reconcile; left deciding). */
   missingDecision: number;
+  /** Stranded signaled tasks resubmitted to zeus and moved to deciding (F-07). */
+  resubmitted: number;
+  /** Signaled tasks that cannot be resubmitted (no persisted context/signalId, or non-submittable type). */
+  unsubmittable: number;
 }
 
 interface ReconcileDeps {
@@ -52,6 +56,8 @@ export async function reconcileDecisions(deps: ReconcileDeps): Promise<Reconcile
     unchanged: 0,
     drifted: 0,
     missingDecision: 0,
+    resubmitted: 0,
+    unsubmittable: 0,
   };
   const tasks = await deps.tasks.list('deciding');
   for (const task of tasks) {
@@ -116,6 +122,46 @@ export async function reconcileDecisions(deps: ReconcileDeps): Promise<Reconcile
 
     await deps.tasks.setStatus(task.id, target, deps.now());
     summary.reconciled += 1;
+  }
+
+  // F-07: tasks stranded in `signaled` — created by the daily batch but never
+  // submitted to zeus (mid-loop crash / submit failure) — previously had no
+  // exit: same-day re-runs are idempotency-blocked and this reconciler only
+  // looked at `deciding`. Resubmit from the persisted candidate context
+  // (migration 007); on zeus failure the task stays signaled and the next
+  // reconcile retries.
+  const signaled = await deps.tasks.list('signaled');
+  for (const task of signaled) {
+    const context = task.context;
+    const kind = task.type === 'write' || task.type === 'fix' ? task.type : undefined;
+    if (kind === undefined || task.signalId === undefined || context?.query === undefined || context.angle === undefined) {
+      summary.unsubmittable += 1;
+      continue;
+    }
+    try {
+      const response = await deps.zeus.submitDecision({
+        taskId: task.id,
+        kind,
+        query: context.query,
+        angle: context.angle,
+        ...(context.targetUrl !== undefined ? { targetUrl: context.targetUrl } : {}),
+        evidenceSignalIds: [task.signalId],
+      });
+      await deps.tasks.patch(task.id, { zeusDecisionId: response.decisionId }, deps.now());
+      assertTaskTransition('signaled', 'deciding');
+      await deps.tasks.setStatus(task.id, 'deciding', deps.now());
+      summary.resubmitted += 1;
+    } catch (err) {
+      summary.unchanged += 1;
+      await deps.failures?.upsert({
+        channel: 'zeus',
+        reason: 'SIGNALED_RESUBMIT_FAILED',
+        retryable: true,
+        lastError: `task ${task.id} signaled resubmit failed: ${err instanceof Error ? err.message : String(err)}`,
+        externalRef: JSON.stringify({ taskId: task.id }),
+        now: deps.now(),
+      });
+    }
   }
   return summary;
 }
