@@ -61,7 +61,13 @@ export interface ReceivedCode {
 
 export interface LocalCodeReceiver {
   readonly port: number;
-  waitForCode(): Promise<ReceivedCode>;
+  /**
+   * Resolves with the captured code. When `expectedState` is given, the
+   * redirect's `state` must match the one sent in buildConsentUrl — a
+   * mismatch rejects with VALIDATION_FAILED (F-08: OAuth baseline CSRF
+   * protection; previously the returned state was never compared).
+   */
+  waitForCode(expectedState?: string): Promise<ReceivedCode>;
   close(): Promise<void>;
 }
 
@@ -119,7 +125,21 @@ export async function startLocalCodeReceiver(): Promise<LocalCodeReceiver> {
 
   return {
     port: address.port,
-    waitForCode: () => received,
+    waitForCode: (expectedState?: string) => {
+      const checked = received.then(value => {
+        if (expectedState !== undefined && value.state !== expectedState) {
+          throw GrowthAgentErrors.validation(
+            'oauth callback state mismatch — refusing the code (possible CSRF or stale callback)',
+          );
+        }
+        return value;
+      });
+      // Same early-handle discipline as `received` above: the HTTP handler may
+      // settle before the caller attaches its consumer; consumers still get
+      // the rejection through the returned promise.
+      checked.catch(() => {});
+      return checked;
+    },
     close: () =>
       new Promise<void>((resolveClose, rejectClose) => {
         server.close((err) => (err ? rejectClose(err) : resolveClose()));
