@@ -22,6 +22,7 @@
 // tests only — no real GitHub call is made in this wave (T-D4 deferred).
 
 import { GrowthAgentError, GrowthAgentErrors } from '../../errors.js';
+import { assertSafePublishPath } from './paths.js';
 import type {
   ChangeRef,
   ChangeStatus,
@@ -104,6 +105,12 @@ export class GitHubPublisher implements SitePublisher {
   }
 
   async openChange(input: OpenChangeInput): Promise<ChangeRef> {
+    // F-09: validate every target path BEFORE any network call — a poisoned
+    // draft slug must never reach the Contents API with the bot PAT.
+    for (const file of input.files) {
+      assertSafePublishPath(file.path);
+    }
+
     const branch = branchForTask(input.taskId);
     const base = await this.getRef(`heads/${this.baseBranch}`);
     if (base === undefined) {
