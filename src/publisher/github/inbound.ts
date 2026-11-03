@@ -38,6 +38,7 @@ import type { GrowthTaskRepository } from '../../task/repository.js';
 import { ChannelFailureRepository } from '../../connector/zeus/webhook-repository.js';
 import {
   githubDeliveryId,
+  legacyGithubDeliveryId,
   GithubWebhookRepository,
 } from './webhook-repository.js';
 
@@ -169,11 +170,14 @@ export async function handleInboundGithubEvent(
       typeof parsed.action !== 'string' ||
       parsed.pull_request === null ||
       typeof parsed.pull_request !== 'object' ||
-      typeof parsed.pull_request.number !== 'number'
+      typeof parsed.pull_request.number !== 'number' ||
+      parsed.repository === null ||
+      typeof parsed.repository !== 'object' ||
+      typeof (parsed.repository as { full_name?: unknown }).full_name !== 'string'
     ) {
       return {
         status: 400,
-        body: failureBody('BAD_EVENT', 'event must include action and pull_request.number', false),
+        body: failureBody('BAD_EVENT', 'event must include action, pull_request.number and repository.full_name', false),
       };
     }
     event = parsed as GithubPullRequestEvent;
@@ -187,9 +191,13 @@ export async function handleInboundGithubEvent(
   // Audit-only actions: no state edge in §3.2 (new PR commits, reviews, ...).
   // They are repeatable per PR, so the ledger id carries the push head SHA
   // (or the GitHub delivery GUID); lifecycle actions keep a deterministic id.
+  // Both shapes are scoped by repository (F-03); the legacy pre-scope id is
+  // still probed below so redeliveries of pre-fix events stay deduped.
   const auditOnly = action === 'synchronize' || action === 'edited' || action === 'assigned'
     || action === 'review_requested' || action === 'labeled' || action === 'unlabeled';
+  const repoFullName = event.repository.full_name;
   let id: string;
+  let legacyId: string;
   if (auditOnly) {
     const repeatKey = event.pull_request.head.sha ?? headers.delivery;
     if (repeatKey === null || repeatKey === '') {
@@ -198,12 +206,14 @@ export async function handleInboundGithubEvent(
         body: failureBody('BAD_EVENT', 'repeatable audit events need a head SHA or delivery id', false),
       };
     }
-    id = githubDeliveryId(prNumber, action, repeatKey);
+    id = githubDeliveryId(repoFullName, prNumber, action, repeatKey);
+    legacyId = legacyGithubDeliveryId(prNumber, action, repeatKey);
   } else {
-    id = githubDeliveryId(prNumber, action);
+    id = githubDeliveryId(repoFullName, prNumber, action);
+    legacyId = legacyGithubDeliveryId(prNumber, action);
   }
 
-  const existing = await deps.deliveries.find(id);
+  const existing = (await deps.deliveries.find(id)) ?? (await deps.deliveries.find(legacyId));
   if (existing !== undefined) {
     return {
       status: 200,
