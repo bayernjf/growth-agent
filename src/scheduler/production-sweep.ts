@@ -127,129 +127,144 @@ export async function runProductionSweep(
   const siteRows = await latestSnapshotRows(deps, day);
 
   for (const task of drafting) {
-    const context = task.context;
-    if (context === undefined) {
-      items.push({
+    // Per-task fault isolation (F-06): ANY per-task failure — draft obtain,
+    // SERP/GSC reads, the publish batch itself — lands as a failed item and
+    // the sweep continues. Without this, one task's UPSTREAM_UNAVAILABLE
+    // killed the whole sweep and silently skipped the rest of the day.
+    try {
+      const context = task.context;
+      if (context === undefined) {
+        items.push({
+          taskId: task.id,
+          outcome: 'skipped',
+          reason: 'no persisted candidate context (created before migration 007)',
+        });
+        continue;
+      }
+
+      const obtained = await deps.drafts.obtain({
         taskId: task.id,
-        outcome: 'skipped',
-        reason: 'no persisted candidate context (created before migration 007)',
+        taskType: task.type,
+        siteId: task.siteId,
+        query: context.query,
+        ...(context.targetUrl !== undefined ? { targetUrl: context.targetUrl } : {}),
+        angle: context.angle,
+        ...(task.loomContentId !== undefined ? { loomContentId: task.loomContentId } : {}),
       });
-      continue;
-    }
 
-    const obtained = await deps.drafts.obtain({
-      taskId: task.id,
-      taskType: task.type,
-      siteId: task.siteId,
-      query: context.query,
-      ...(context.targetUrl !== undefined ? { targetUrl: context.targetUrl } : {}),
-      angle: context.angle,
-      ...(task.loomContentId !== undefined ? { loomContentId: task.loomContentId } : {}),
-    });
-
-    if (obtained.status === 'unavailable') {
-      // Persist the content id even though no draft arrived, so the next sweep
-      // polls loom instead of starting a second chain.
+      if (obtained.status === 'unavailable') {
+        // Persist the content id even though no draft arrived, so the next sweep
+        // polls loom instead of starting a second chain.
+        if (obtained.loomContentId !== undefined && task.loomContentId === undefined) {
+          await deps.tasks.patch(task.id, { loomContentId: obtained.loomContentId }, nowIso());
+        }
+        items.push({ taskId: task.id, outcome: 'skipped', reason: obtained.reason });
+        continue;
+      }
       if (obtained.loomContentId !== undefined && task.loomContentId === undefined) {
         await deps.tasks.patch(task.id, { loomContentId: obtained.loomContentId }, nowIso());
       }
-      items.push({ taskId: task.id, outcome: 'skipped', reason: obtained.reason });
-      continue;
-    }
-    if (obtained.loomContentId !== undefined && task.loomContentId === undefined) {
-      await deps.tasks.patch(task.id, { loomContentId: obtained.loomContentId }, nowIso());
-    }
 
-    const isFix = task.type === 'fix';
-    const targetUrl = context.targetUrl ?? context.query;
-    const gscPages = toEvidence(
-      isFix ? siteRows.filter(row => row.dimensionKey === targetUrl) : siteRows,
-    );
-    // A fix task repairs a page that is by definition already published, so
-    // that page must not reach the dedupe gate as a collision. The gate's own
-    // early return for fix tasks skips GSC near-matches but still runs the
-    // open-change / published check, which would otherwise block every repair.
-    const publishedContent = toEvidence(
-      isFix ? siteRows.filter(row => row.dimensionKey !== targetUrl) : siteRows,
-    ).map(page => ({ url: page.url, title: page.title }));
+      const isFix = task.type === 'fix';
+      const targetUrl = context.targetUrl ?? context.query;
+      const gscPages = toEvidence(
+        isFix ? siteRows.filter(row => row.dimensionKey === targetUrl) : siteRows,
+      );
+      // A fix task repairs a page that is by definition already published, so
+      // that page must not reach the dedupe gate as a collision. The gate's own
+      // early return for fix tasks skips GSC near-matches but still runs the
+      // open-change / published check, which would otherwise block every repair.
+      const publishedContent = toEvidence(
+        isFix ? siteRows.filter(row => row.dimensionKey !== targetUrl) : siteRows,
+      ).map(page => ({ url: page.url, title: page.title }));
 
-    let keywordVolume: number | undefined;
-    if (isFix) {
-      if (gscPages.length === 0) {
-        items.push({
-          taskId: task.id,
-          outcome: 'skipped',
-          reason: `no GSC snapshot row for ${targetUrl}; the daily batch has not persisted one yet`,
-        });
-        continue;
+      let keywordVolume: number | undefined;
+      if (isFix) {
+        if (gscPages.length === 0) {
+          items.push({
+            taskId: task.id,
+            outcome: 'skipped',
+            reason: `no GSC snapshot row for ${targetUrl}; the daily batch has not persisted one yet`,
+          });
+          continue;
+        }
+      } else {
+        const ideas = await deps.recorder.measure(
+          { provider: 'serp:dataforseo', method: 'GET', endpoint: 'keywordIdeas', taskId: task.id },
+          async () => {
+            const rows = await deps.serp.keywordIdeas(context.query);
+            return { data: rows, units: rows.length, httpStatus: 200 };
+          },
+        );
+        keywordVolume = ideas.find(
+          idea => idea.keyword.toLowerCase() === context.query.toLowerCase(),
+        )?.volume;
+        if (keywordVolume === undefined) {
+          items.push({
+            taskId: task.id,
+            outcome: 'skipped',
+            reason: `SERP provider returned no volume for "${context.query}"; the value gate demand floor needs it`,
+          });
+          continue;
+        }
       }
-    } else {
-      const ideas = await deps.recorder.measure(
-        { provider: 'serp:dataforseo', method: 'GET', endpoint: 'keywordIdeas', taskId: task.id },
+
+      const serp = await deps.recorder.measure(
+        { provider: 'serp:dataforseo', method: 'GET', endpoint: 'serp', taskId: task.id },
         async () => {
-          const rows = await deps.serp.keywordIdeas(context.query);
+          const rows = await deps.serp.serp(context.query);
           return { data: rows, units: rows.length, httpStatus: 200 };
         },
       );
-      keywordVolume = ideas.find(
-        idea => idea.keyword.toLowerCase() === context.query.toLowerCase(),
-      )?.volume;
-      if (keywordVolume === undefined) {
-        items.push({
+
+      const result = await runProductionBatch(
+        {
+          tasks: deps.tasks,
+          publisher: deps.publisher,
+          recorder: deps.recorder,
+          now: nowIso,
+        },
+        {
           taskId: task.id,
-          outcome: 'skipped',
-          reason: `SERP provider returned no volume for "${context.query}"; the value gate demand floor needs it`,
-        });
-        continue;
-      }
-    }
-
-    const serp = await deps.recorder.measure(
-      { provider: 'serp:dataforseo', method: 'GET', endpoint: 'serp', taskId: task.id },
-      async () => {
-        const rows = await deps.serp.serp(context.query);
-        return { data: rows, units: rows.length, httpStatus: 200 };
-      },
-    );
-
-    const result = await runProductionBatch(
-      {
-        tasks: deps.tasks,
-        publisher: deps.publisher,
-        recorder: deps.recorder,
-        now: nowIso,
-      },
-      {
-        taskId: task.id,
-        draft: obtained.draft,
-        serp,
-        gscPages,
-        existingOpenChanges: await collectOpenChanges(deps.tasks, task.id),
-        publishedContent,
-        ...(keywordVolume !== undefined ? { keywordVolume } : {}),
-        changeSummary: obtained.changeSummary,
-        repoFullName: deps.repoFullName,
-      },
-    );
-
-    items.push({
-      taskId: task.id,
-      outcome: result.action,
-      ...(result.prRef !== undefined ? { prRef: result.prRef } : {}),
-    });
-
-    // A write task's verification target only exists once the PR names a path,
-    // so it is recorded here rather than at candidate time.
-    if (result.action === 'pr_opened' && !isFix && context.publishedUrl === undefined) {
-      const publishedUrl = new URL(
-        obtained.draft.slug.replace(/^\/+/, ''),
-        `${deps.siteOrigin}/`,
-      ).href;
-      await deps.tasks.patch(
-        task.id,
-        { context: { ...context, publishedUrl } },
-        nowIso(),
+          draft: obtained.draft,
+          serp,
+          gscPages,
+          existingOpenChanges: await collectOpenChanges(deps.tasks, task.id),
+          publishedContent,
+          ...(keywordVolume !== undefined ? { keywordVolume } : {}),
+          changeSummary: obtained.changeSummary,
+          repoFullName: deps.repoFullName,
+        },
       );
+
+      items.push({
+        taskId: task.id,
+        outcome: result.action,
+        ...(result.prRef !== undefined ? { prRef: result.prRef } : {}),
+      });
+
+      // A write task's verification target only exists once the PR names a path,
+      // so it is recorded here rather than at candidate time.
+      if (result.action === 'pr_opened' && !isFix && context.publishedUrl === undefined) {
+        const publishedUrl = new URL(
+          obtained.draft.slug.replace(/^\/+/, ''),
+          `${deps.siteOrigin}/`,
+        ).href;
+        await deps.tasks.patch(
+          task.id,
+          { context: { ...context, publishedUrl } },
+          nowIso(),
+        );
+      }
+    } catch (error) {
+      // The batch leaves the task in drafting on error, so the next sweep
+      // retries it; the failure reason lands in the item.
+      items.push({
+        taskId: task.id,
+        outcome: 'failed',
+        reason: error instanceof Error ? error.message : String(error),
+      });
+      continue;
     }
   }
 

@@ -140,3 +140,84 @@ describe('runProductionBatch (§5.C)', () => {
     ).rejects.toThrowError(/drafting/);
   });
 });
+
+describe('runProductionBatch ordering (P1: external publish before terminal status)', () => {
+  const batchInput = (taskId: string) => ({
+    taskId,
+    draft: goodDraft,
+    serp: goodSerp,
+    gscPages: [],
+    existingOpenChanges: [],
+    publishedContent: [],
+    keywordVolume: 800,
+    changeSummary: 'x',
+    repoFullName: 'owner/site',
+  });
+
+  it('external publish failure leaves the task retryable in drafting, never stuck', async () => {
+    class FlakyPublisher extends FakeSitePublisher {
+      override async openChange(): Promise<never> {
+        throw new Error('github 503: Service Unavailable');
+      }
+    }
+    deps = { ...deps, publisher: new FlakyPublisher() };
+    await tasks.create({ id: 'gt_ext_fail', siteId: 's', type: 'write', status: 'drafting' }, now);
+
+    await expect(runProductionBatch(deps, batchInput('gt_ext_fail'))).rejects.toThrowError(/github 503/);
+    const stuck = await tasks.get('gt_ext_fail');
+    expect(stuck?.status).toBe('drafting');
+    expect(stuck?.prRef).toBeUndefined();
+
+    // The failure is transient: re-running the batch converges to the terminal state.
+    deps = { ...deps, publisher: new FakeSitePublisher() };
+    const retry = await runProductionBatch(deps, batchInput('gt_ext_fail'));
+    expect(retry.action).toBe('pr_opened');
+    expect((await tasks.get('gt_ext_fail'))?.status).toBe('pr_opened');
+  });
+
+  it('crash after publish but before persist: restart recovers without a duplicate PR', async () => {
+    class CrashOnceRepo extends GrowthTaskRepository {
+      private crashesLeft = 1;
+      override async patch(...args: Parameters<GrowthTaskRepository['patch']>) {
+        if (this.crashesLeft > 0) {
+          this.crashesLeft -= 1;
+          throw new Error('simulated crash after publish');
+        }
+        return super.patch(...args);
+      }
+    }
+    const crashRepo = new CrashOnceRepo(db);
+    const pub = new FakeSitePublisher();
+    const crashDeps: ProductionDeps = { ...deps, tasks: crashRepo, publisher: pub };
+    await crashRepo.create({ id: 'gt_crash', siteId: 's', type: 'write', status: 'drafting' }, now);
+
+    // Crash window: the PR exists remotely but nothing persisted locally.
+    await expect(runProductionBatch(crashDeps, batchInput('gt_crash'))).rejects.toThrowError(/simulated crash/);
+    expect((await crashRepo.get('gt_crash'))?.status).toBe('drafting');
+    expect(pub.openedChanges()).toHaveLength(1);
+
+    // Restart: the sweep replays the batch; the idempotent publisher returns
+    // the SAME change instead of opening a duplicate.
+    const retry = await runProductionBatch(crashDeps, batchInput('gt_crash'));
+    expect(retry.action).toBe('pr_opened');
+    expect(retry.prRef?.number).toBe(1);
+    expect(pub.openedChanges()).toHaveLength(1);
+    const task = await crashRepo.get('gt_crash');
+    expect(task?.status).toBe('pr_opened');
+    expect(task?.prRef?.number).toBe(1);
+    expect(task?.qaResult?.intent).toBe(true);
+  });
+
+  it('re-delivery after a successful publish cannot open a second PR', async () => {
+    const pub = new FakeSitePublisher();
+    deps = { ...deps, publisher: pub };
+    await tasks.create({ id: 'gt_dup', siteId: 's', type: 'write', status: 'drafting' }, now);
+
+    const first = await runProductionBatch(deps, batchInput('gt_dup'));
+    expect(first.action).toBe('pr_opened');
+    // The batch is guarded by the drafting precondition: a replayed delivery
+    // is refused before any external call.
+    await expect(runProductionBatch(deps, batchInput('gt_dup'))).rejects.toThrowError(/drafting/);
+    expect(pub.openedChanges()).toHaveLength(1);
+  });
+});

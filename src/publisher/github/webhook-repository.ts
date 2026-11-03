@@ -36,15 +36,28 @@ interface DeliveryDbRow {
   updated_at: string;
 }
 
-/** Deterministic idempotency key for one (PR number, action) delivery. */
 /**
- * Deterministic ledger id. Lifecycle actions (opened, closed-merged, ...)
- * are unique per (PR, action); repeatable audit actions (synchronize,
- * edited, ...) append a per-event key — the push head SHA, falling back to
- * the GitHub delivery GUID — so redelivery dedupes while genuine pushes
- * are recorded individually (PRD §8.1 indicator 3).
+ * Deterministic ledger id, scoped by repository (2026-11-02 review F-03):
+ * this deployment serves multiple sites whose repositories each number PRs
+ * from 1, so `gh:<pr>:<action>` collided across repos and the second site's
+ * event was swallowed as a duplicate. Lifecycle actions (opened,
+ * closed-merged, ...) are unique per (repo, PR, action); repeatable audit
+ * actions (synchronize, edited, ...) append a per-event key — the push head
+ * SHA, falling back to the GitHub delivery GUID — so redelivery dedupes while
+ * genuine pushes are recorded individually (PRD §8.1 indicator 3).
  */
-export function githubDeliveryId(prNumber: number, action: string, repeatKey?: string): string {
+export function githubDeliveryId(repoFullName: string, prNumber: number, action: string, repeatKey?: string): string {
+  const base = `gh:${repoFullName}:${prNumber}:${action}`;
+  return repeatKey !== undefined ? `${base}:${repeatKey}` : base;
+}
+
+/**
+ * Pre-F-03 ledger id without the repository scope. Rows recorded before the
+ * fix keep this shape; the inbound handler probes it as a fallback so a
+ * redelivery of a pre-fix event is still recognized as a duplicate instead of
+ * being processed a second time. Never use for new rows.
+ */
+export function legacyGithubDeliveryId(prNumber: number, action: string, repeatKey?: string): string {
   return repeatKey !== undefined
     ? `gh:${prNumber}:${action}:${repeatKey}`
     : `gh:${prNumber}:${action}`;

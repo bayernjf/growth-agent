@@ -9,7 +9,9 @@ set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-PORT="${SMOKE_PORT:-8791}"
+# 8927 instead of 8791: 8791 is the model-hub default port, and a stale
+# model-hub process made the smoke fail against the wrong service.
+PORT="${SMOKE_PORT:-8927}"
 
 echo "==> build"
 npm run build

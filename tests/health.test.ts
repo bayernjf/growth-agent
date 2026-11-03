@@ -25,7 +25,7 @@ describe('GET /healthz', () => {
       db: { dialect: 'sqlite' },
       credentials: [],
       zeus: { mode: 'off', ping: true },
-      reconcile: { reconciled: 0, unchanged: 0, drifted: 0, missingDecision: 0 },
+      reconcile: { reconciled: 0, unchanged: 0, drifted: 0, missingDecision: 0, resubmitted: 0, unsubmittable: 0 },
     };
     const app = createHealthApp({
       dbDialect: 'sqlite',

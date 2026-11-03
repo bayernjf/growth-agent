@@ -20,7 +20,7 @@
 // failure, 2 usage error.
 
 import { existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { loadConfig } from '../config.js';
@@ -31,6 +31,8 @@ import { CostRecorder } from '../cost/recorder.js';
 import { createGscReadonlyProvider } from '../connector/gsc/registry.js';
 import { createAdsReadonlyProvider } from '../connector/ads/registry.js';
 import { GscSnapshotRepository } from '../connector/gsc/snapshot-repository.js';
+import { createSentimentProvider } from '../connector/sentiment/registry.js';
+import { SentimentSnapshotRepository } from '../connector/sentiment/snapshot-repository.js';
 import { createSerpKeywordProvider } from '../connector/serp/registry.js';
 import { createZeusDecisionClient } from '../connector/zeus/registry.js';
 import {
@@ -106,12 +108,11 @@ function siteOrigin(site: SiteConfig): string {
   return new URL(site.gsc.siteUrl).origin;
 }
 
-async function main(): Promise<void> {
+async function main(argv: readonly string[]): Promise<void> {
   if (existsSync('.env')) {
     process.loadEnvFile('.env');
   }
 
-  const argv = process.argv.slice(2);
   const command = argv[0] as Command | undefined;
   if (command === undefined || !COMMANDS.includes(command)) {
     process.stderr.write(USAGE);
@@ -132,6 +133,7 @@ async function main(): Promise<void> {
 
     const tasks = new GrowthTaskRepository(driver);
     const snapshots = new GscSnapshotRepository(driver);
+    const sentimentSnapshots = new SentimentSnapshotRepository(driver);
     const apiCalls = new ApiCallRepository(driver);
     const zeusDeliveries = new WebhookDeliveryRepository(driver);
     const githubDeliveries = new GithubWebhookRepository(driver);
@@ -148,6 +150,10 @@ async function main(): Promise<void> {
     const zeus = createZeusDecisionClient(config);
     const publisher = createSitePublisher(config);
     const drafts = createDraftProvider(config, recorder);
+    // Sentiment was merged library-only (OP-40/41/42) and never wired into the
+    // deploy loop (2026-11-02 review F-04); daily snapshots/alerts and the
+    // weekly section only exist once the provider and its repo are injected.
+    const sentiment = createSentimentProvider(config);
     const origin = siteOrigin(site);
 
     switch (command) {
@@ -157,6 +163,8 @@ async function main(): Promise<void> {
           domain: new URL(site.gsc.siteUrl).hostname,
           gsc,
           snapshots,
+          sentiment,
+          sentimentSnapshots,
           serp,
           zeus,
           tasks,
@@ -239,6 +247,7 @@ async function main(): Promise<void> {
             siteId: site.id,
             ads,
             adsRecorder: recorder,
+            sentiment: sentimentSnapshots,
           },
           day,
         );
@@ -268,7 +277,17 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err: unknown) => {
-  console.error(`batch: ${err instanceof Error ? err.message : String(err)}`);
-  process.exitCode = 1;
-});
+/**
+ * Exported for wiring tests (2026-11-02 review F-04): the CLI entry auto-runs
+ * only when executed as a script; importing this module in tests must be inert.
+ */
+export { main as runBatch };
+
+const invokedAsScript =
+  process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (invokedAsScript) {
+  main(process.argv.slice(2)).catch((err: unknown) => {
+    console.error(`batch: ${err instanceof Error ? err.message : String(err)}`);
+    process.exitCode = 1;
+  });
+}

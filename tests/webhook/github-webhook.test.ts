@@ -16,6 +16,7 @@ import {
 } from '../../src/publisher/github/inbound.js';
 import {
   githubDeliveryId,
+  legacyGithubDeliveryId,
   GithubWebhookRepository,
 } from '../../src/publisher/github/webhook-repository.js';
 import { ChannelFailureRepository } from '../../src/connector/zeus/webhook-repository.js';
@@ -203,16 +204,61 @@ describe('inbound github pull_request webhook (T-D3)', () => {
     expect(second.status).toBe(200);
     const json = (await second.json()) as { duplicate?: boolean };
     expect(json.duplicate).toBe(true);
-    const ledger = await deliveries.find(githubDeliveryId(77, 'opened'));
+    const ledger = await deliveries.find(githubDeliveryId('o/r', 77, 'opened'));
     expect(ledger?.processingResult).toBe('accepted');
     expect((await tasks.get('gt_dup'))?.status).toBe('awaiting_merge');
+  });
+
+  it('scopes the ledger id by repository: the same PR number in two repos is not a duplicate (F-03)', async () => {
+    // Every site repository numbers PRs from 1; pre-fix both deliveries below
+    // shared the id gh:900:opened and the second was swallowed as a duplicate.
+    const repoA = JSON.stringify(makeEvent({ pull_request: { ...makeEvent({}).pull_request, number: 900 } }));
+    const repoBEvent = makeEvent({
+      pull_request: { ...makeEvent({}).pull_request, number: 900, html_url: 'https://github.com/o/s/pull/900' },
+      repository: { full_name: 'o/s' },
+    });
+    const repoB = JSON.stringify(repoBEvent);
+
+    const first = await pushRaw(app, { body: repoA, signature: signGithubBody(SECRET, repoA), delivery: 'guid-900-a' });
+    const second = await pushRaw(app, { body: repoB, signature: signGithubBody(SECRET, repoB), delivery: 'guid-900-b' });
+    expect(first.status).toBe(422); // unknown task, but recorded under repo A
+    expect(second.status).toBe(422);
+    expect(((await second.json()) as { duplicate?: boolean }).duplicate).toBeUndefined();
+
+    const ledgerA = await deliveries.find(githubDeliveryId('o/r', 900, 'opened'));
+    const ledgerB = await deliveries.find(githubDeliveryId('o/s', 900, 'opened'));
+    expect(ledgerA?.processingResult).toBe('rejected');
+    expect(ledgerB?.processingResult).toBe('rejected');
+  });
+
+  it('still dedupes a redelivery whose row predates the repository-scoped id (F-03 compat)', async () => {
+    await seedTask('gt_legacy', 'pr_opened', 66);
+    // Simulate a ledger row written before the fix (no repository in the id).
+    await deliveries.record({
+      id: legacyGithubDeliveryId(66, 'opened'),
+      prNumber: 66,
+      eventType: 'pull_request',
+      action: 'opened',
+      taskId: 'gt_legacy',
+      signatureValid: true,
+      processingResult: 'accepted',
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+    const body = JSON.stringify(makeEvent({ pull_request: { ...makeEvent({}).pull_request, number: 66 } }));
+    const res = await pushRaw(app, { body, signature: signGithubBody(SECRET, body), delivery: 'guid-66-redelivered' });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { duplicate?: boolean }).duplicate).toBe(true);
+    // No second transition: the task must remain exactly as the legacy row left it.
+    expect((await tasks.get('gt_legacy'))?.status).toBe('pr_opened');
+    expect(await deliveries.find(githubDeliveryId('o/r', 66, 'opened'))).toBeUndefined();
   });
 
   it('422s when the PR number cannot be linked to a local task', async () => {
     const body = JSON.stringify(makeEvent({ pull_request: { ...makeEvent({}).pull_request, number: 404 } }));
     const res = await pushRaw(app, { body, signature: signGithubBody(SECRET, body) });
     expect(res.status).toBe(422);
-    const ledger = await deliveries.find(githubDeliveryId(404, 'opened'));
+    const ledger = await deliveries.find(githubDeliveryId('o/r', 404, 'opened'));
     expect(ledger?.processingResult).toBe('rejected');
     expect(ledger?.errorCode).toBe('UNKNOWN_TASK');
     const failure = await failures.get('cf:github_webhook:UNKNOWN_TASK');
@@ -228,7 +274,7 @@ describe('inbound github pull_request webhook (T-D3)', () => {
     const res = await pushRaw(app, { body, signature: signGithubBody(SECRET, body), delivery: 'guid-88-closed' });
     expect(res.status).toBe(409);
     expect((await tasks.get('gt_drift'))?.status).toBe('verifying');
-    const ledger = await deliveries.find(githubDeliveryId(88, 'closed-merged'));
+    const ledger = await deliveries.find(githubDeliveryId('o/r', 88, 'closed-merged'));
     expect(ledger?.processingResult).toBe('rejected');
     expect(ledger?.errorCode).toBe('INVALID_TRANSITION');
   });
@@ -272,7 +318,7 @@ describe('inbound github pull_request webhook (T-D3)', () => {
       delivery: 'guid-55-sync-2',
     });
     expect(sync2.status).toBe(200);
-    expect(await deliveries.find(githubDeliveryId(55, 'synchronize', 'push-2'))).toBeDefined();
+    expect(await deliveries.find(githubDeliveryId('o/r', 55, 'synchronize', 'push-2'))).toBeDefined();
     const dup = await pushRaw(app, {
       body: syncBody2,
       signature: signGithubBody(SECRET, syncBody2),

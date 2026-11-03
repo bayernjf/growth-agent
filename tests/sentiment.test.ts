@@ -94,7 +94,7 @@ describe('sentiment snapshot repository (OP-40)', () => {
     await repo.upsert([{ ...row, metricValue: 2 }]); // same-day rerun overwrites
     const all = await repo.list('2026-11-02', '2026-11-02');
     expect(all).toHaveLength(1);
-    expect(all[0].metricValue).toBe(2);
+    expect(all[0]!.metricValue).toBe(2);
     const negatives = await repo.listNegative('2026-11-02', '2026-11-02');
     expect(negatives).toHaveLength(1);
   });

@@ -75,6 +75,31 @@ describe('GSC OAuth installed-app flow (T-B2; NOT hit against real Google yet)',
     }
   });
 
+  // Review F-08: the redirect's state was captured but never compared against
+  // the value sent in buildConsentUrl. waitForCode(expectedState) now enforces
+  // the OAuth baseline CSRF check.
+  it('rejects the code when the callback state does not match the expected state', async () => {
+    const receiver = await startLocalCodeReceiver();
+    try {
+      const pending = receiver.waitForCode('st-expected');
+      await fetch(`http://127.0.0.1:${receiver.port}/?code=oauth-code-2&state=st-WRONG`);
+      await expect(pending).rejects.toMatchObject({ code: 'VALIDATION_FAILED' });
+    } finally {
+      await receiver.close();
+    }
+  });
+
+  it('accepts the code when the callback state matches the expected state', async () => {
+    const receiver = await startLocalCodeReceiver();
+    try {
+      const pending = receiver.waitForCode('st-expected');
+      await fetch(`http://127.0.0.1:${receiver.port}/?code=oauth-code-3&state=st-expected`);
+      await expect(pending).resolves.toEqual({ code: 'oauth-code-3', state: 'st-expected' });
+    } finally {
+      await receiver.close();
+    }
+  });
+
   it('code exchange posts the authorization_code grant at the token endpoint', async () => {
     const { fetchImpl, seen } = fakeTokenEndpoint(200, {
       access_token: 'at-new',

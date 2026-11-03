@@ -17,6 +17,7 @@ import { applyQaDecision, runQaGates } from '../qa/orchestrator.js';
 import type { ContentDraft, ExistingContent, GscPageEvidence } from '../qa/types.js';
 import type { SerpResult } from '../connector/serp/types.js';
 import type { PrRef } from '../task/types.js';
+import { assertTaskTransition } from '../task/state-machine.js';
 import { branchForTask } from '../publisher/github/http.js';
 import { GrowthAgentErrors } from '../errors.js';
 
@@ -69,11 +70,20 @@ export async function runProductionBatch(
     publishedContent: input.publishedContent,
     qaRevisionCount: task.qaRevisionCount,
   });
-  await applyQaDecision(deps.tasks, input.taskId, decision, deps.now());
 
+  // QA failure paths carry no external side effect, so their state write is
+  // safe to persist immediately (unchanged behaviour).
   if (decision.action !== 'pr_opened') {
+    await applyQaDecision(deps.tasks, input.taskId, decision, deps.now());
     return { action: decision.action };
   }
+
+  // Ordering fix (P1): the status flip to pr_opened must happen AFTER the
+  // external publish, never before. Previously applyQaDecision ran first, so
+  // a GitHub failure (or a crash mid-flight) stranded the task in pr_opened
+  // with no prRef — a state the batch never re-enters. The publisher treats
+  // taskId as its idempotency key, so any retry of this batch reuses the
+  // already-opened PR instead of creating a duplicate.
 
   const [intent, dedupe, value] = decision.qaResult.scores;
   const body = buildPrBody({
@@ -110,6 +120,11 @@ export async function runProductionBatch(
     // ref convention, so prefer the task-derived branch name for github.
     branch: deps.publisher.platform === 'github' ? branchForTask(input.taskId) : change.ref,
   };
-  await deps.tasks.patch(input.taskId, { prRef }, deps.now());
+  // Persist the QA snapshot and prRef before the status flip: if the process
+  // dies between the publish and this point, the task is still drafting and
+  // the next sweep replays the batch end-to-end (idempotent publisher).
+  await deps.tasks.patch(input.taskId, { qaResult: decision.qaResult, prRef }, deps.now());
+  assertTaskTransition('drafting', 'pr_opened');
+  await deps.tasks.setStatus(input.taskId, 'pr_opened', deps.now());
   return { action: 'pr_opened', prRef };
 }

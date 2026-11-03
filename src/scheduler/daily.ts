@@ -59,6 +59,12 @@ export interface DailyRunResult {
   ran: boolean;
   reason?: string;
   submitted: Array<{ taskId: string; kind: GrowthTaskType; query: string; decisionId: string }>;
+  /**
+   * Per-candidate submit failures (F-07): the task row stays `signaled` and
+   * reconcileDecisions resubmits it on the next startup — previously one bad
+   * candidate aborted the loop and stranded the rest with no exit.
+   */
+  submitFailures: Array<{ taskId: string; reason: string }>;
   deferredWrites: WriteCandidate[];
   deferredFixes: FixCandidate[];
   /** Negative-mention alerts (OP-41); only when a sentiment provider is wired. */
@@ -92,7 +98,7 @@ export class DailyScriptRunner {
   async run(day: Date = this.deps.now()): Promise<DailyRunResult> {
     // §9 re-entry guard: a tick that has not finished skips the next tick.
     if (this.tickInFlight) {
-      return { ran: false, reason: 'tick_in_flight', submitted: [], deferredWrites: [], deferredFixes: [] };
+      return { ran: false, reason: 'tick_in_flight', submitted: [], submitFailures: [], deferredWrites: [], deferredFixes: [] };
     }
 
     // Same-day idempotency: a run already created tasks for this site/date.
@@ -103,7 +109,7 @@ export class DailyScriptRunner {
       t => t.siteId === this.deps.siteId && t.createdAt.startsWith(dayPrefix),
     );
     if (alreadyRan) {
-      return { ran: false, reason: 'already_ran_today', submitted: [], deferredWrites: [], deferredFixes: [] };
+      return { ran: false, reason: 'already_ran_today', submitted: [], submitFailures: [], deferredWrites: [], deferredFixes: [] };
     }
 
     this.tickInFlight = true;
@@ -217,7 +223,12 @@ export class DailyScriptRunner {
     const selection = selectDailyCandidates(writes, fixes);
 
     // 6. One zeus decision per selected task, signaled -> deciding.
+    // F-07: a submit failure no longer aborts the loop — the failed candidate
+    // stays signaled (reconcileDecisions resubmits it at the next startup),
+    // the failure is surfaced in submitFailures, and remaining candidates
+    // still get their decision submitted.
     const submitted: DailyRunResult['submitted'] = [];
+    const submitFailures: DailyRunResult['submitFailures'] = [];
     const idFactory = d.idFactory ?? defaultIdFactory;
     const selected: Array<{
       kind: 'write' | 'fix';
@@ -242,46 +253,54 @@ export class DailyScriptRunner {
     ];
     for (const [index, candidate] of selected.entries()) {
       const taskId = idFactory(day, candidate.kind, index);
-      await d.tasks.create(
-        {
-          id: taskId,
-          siteId: d.siteId,
-          type: candidate.kind,
-          signalId: candidate.signalId,
-          status: 'signaled',
-          // Persisted so the production and verification batches can run in a
-          // later process against the stored task alone (migration 007).
-          context: {
-            query: candidate.query,
-            angle: candidate.angle,
-            ...(candidate.targetUrl !== undefined ? { targetUrl: candidate.targetUrl } : {}),
+      try {
+        await d.tasks.create(
+          {
+            id: taskId,
+            siteId: d.siteId,
+            type: candidate.kind,
+            signalId: candidate.signalId,
+            status: 'signaled',
+            // Persisted so the production and verification batches can run in a
+            // later process against the stored task alone (migration 007).
+            context: {
+              query: candidate.query,
+              angle: candidate.angle,
+              ...(candidate.targetUrl !== undefined ? { targetUrl: candidate.targetUrl } : {}),
+            },
           },
-        },
-        nowIso(),
-      );
-      const response = await d.recorder.measure(
-        { provider: 'zeus', method: 'POST', endpoint: 'decisions', taskId },
-        async () => {
-          const res = await d.zeus.submitDecision({
-            taskId,
-            kind: candidate.kind,
-            query: candidate.query,
-            angle: candidate.angle,
-            ...(candidate.targetUrl !== undefined ? { targetUrl: candidate.targetUrl } : {}),
-            evidenceSignalIds: [candidate.signalId],
-          });
-          return { data: res, units: 1, httpStatus: 201 };
-        },
-      );
-      await d.tasks.patch(taskId, { zeusDecisionId: response.decisionId }, nowIso());
-      assertTaskTransition('signaled', 'deciding');
-      await d.tasks.setStatus(taskId, 'deciding', nowIso());
-      submitted.push({ taskId, kind: candidate.kind, query: candidate.query, decisionId: response.decisionId });
+          nowIso(),
+        );
+        const response = await d.recorder.measure(
+          { provider: 'zeus', method: 'POST', endpoint: 'decisions', taskId },
+          async () => {
+            const res = await d.zeus.submitDecision({
+              taskId,
+              kind: candidate.kind,
+              query: candidate.query,
+              angle: candidate.angle,
+              ...(candidate.targetUrl !== undefined ? { targetUrl: candidate.targetUrl } : {}),
+              evidenceSignalIds: [candidate.signalId],
+            });
+            return { data: res, units: 1, httpStatus: 201 };
+          },
+        );
+        await d.tasks.patch(taskId, { zeusDecisionId: response.decisionId }, nowIso());
+        assertTaskTransition('signaled', 'deciding');
+        await d.tasks.setStatus(taskId, 'deciding', nowIso());
+        submitted.push({ taskId, kind: candidate.kind, query: candidate.query, decisionId: response.decisionId });
+      } catch (error) {
+        submitFailures.push({
+          taskId,
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
 
     return {
       ran: true,
       submitted,
+      submitFailures,
       deferredWrites: selection.deferredWrites,
       deferredFixes: selection.deferredFixes,
       ...(d.sentiment !== undefined ? { sentimentAlerts } : {}),

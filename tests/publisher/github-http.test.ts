@@ -325,4 +325,45 @@ describe('GitHub publisher openChange (T-D2)', () => {
       expect(await publisher.getChangeStatus('1')).toBe(state.expected);
     }
   });
+
+  // Review F-09: a draft slug lands at PUT /contents/:path with the bot PAT.
+  // Unsafe paths must be rejected before ANY network call (fake server records
+  // zero requests), otherwise `../../.github/workflows/x.yml` is privilege
+  // escalation into repo workflows.
+  describe('openChange path safety (F-09)', () => {
+    const unsafePaths = [
+      '../../.github/workflows/x.yml',
+      '../outside.md',
+      '/abs/path.md',
+      '.github/workflows/x.yml',
+      '.GITHUB/workflows/x.yml',
+      'a/../b.md',
+      'back\\slash.md',
+      'with?query.md',
+      'trailingslash/',
+      'dot/./file.md',
+    ];
+
+    for (const badPath of unsafePaths) {
+      it(`rejects "${badPath}" with VALIDATION_FAILED and zero network calls`, async () => {
+        fake.requests.length = 0;
+        const { publisher } = makePublisher(fake.baseUrl);
+        await expect(
+          publisher.openChange({ ...changeInput, files: [{ path: badPath, content: 'x' }] }),
+        ).rejects.toMatchObject({ code: 'VALIDATION_FAILED' });
+        expect(fake.requests).toEqual([]);
+      });
+    }
+
+    it('accepts ordinary nested page paths', async () => {
+      fake.requests.length = 0;
+      fake.handler = statefulHandler();
+      const { publisher } = makePublisher(fake.baseUrl);
+      const ref = await publisher.openChange({
+        ...changeInput,
+        files: [{ path: 'docs/guides/my-page_v2.md', content: '# ok' }],
+      });
+      expect(ref.number).toBeGreaterThan(0);
+    });
+  });
 });
