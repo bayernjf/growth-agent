@@ -39,7 +39,7 @@ State of growth-agent as of 2026-10-28.
 
 ## 已知缺口（按优先级）
 
-1. ~~零凭据离线模式产不出候选~~ **已修（`feature/offline-replay`，未推送）**。
+1. ~~零凭据离线模式产不出候选~~ **已修并合 main（merge `143d444`，fix `4eedb78`/`90efddd`；`git branch -r --contains 143d444` 命中 `origin/main` 与 `origin/dev`）**。
    根因：回放忽略输入——GSC 不论 `page`/`query` 维度都返回同一批 query 维行且两个
    窗口相同；SERP 对任何 query 返回同一份结果。修复：fixture 按维度+窗口结构化
    （`analytics.query` / `analytics.page.recent|prior`，窗口按 startDate 中点选桶），
