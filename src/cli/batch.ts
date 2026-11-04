@@ -148,7 +148,9 @@ async function main(argv: readonly string[]): Promise<void> {
     const ads = createAdsReadonlyProvider(config);
     const serp = createSerpKeywordProvider(config);
     const zeus = createZeusDecisionClient(config);
-    const publisher = createSitePublisher(config);
+    // F-05: the publisher is bound to the selected site's repository; there is
+    // no deployment-wide owner/repo default any more.
+    const publisher = createSitePublisher(config, site);
     const drafts = createDraftProvider(config, recorder);
     // Sentiment was merged library-only (OP-40/41/42) and never wired into the
     // deploy loop (2026-11-02 review F-04); daily snapshots/alerts and the
