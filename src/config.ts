@@ -5,7 +5,6 @@
 export interface AppConfig {
   host: string;
   port: number;
-  apiToken?: string | undefined;
   dbDriver: 'sqlite' | 'postgres';
   sqlitePath: string;
   /** zeus decision kernel integration (T-A3). off = deterministic offline. */
@@ -96,7 +95,6 @@ export function loadConfig(): AppConfig {
   return {
     host: process.env.GA_HOST ?? '127.0.0.1',
     port: num('GA_PORT', 8790),
-    apiToken: process.env.GA_API_TOKEN || undefined,
     dbDriver,
     sqlitePath: process.env.GA_SQLITE_PATH ?? './data/growth-agent.db',
     zeusMode,
