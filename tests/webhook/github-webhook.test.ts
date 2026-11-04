@@ -105,6 +105,7 @@ beforeAll(async () => {
   failures = new ChannelFailureRepository(db);
   app = createGithubWebhookApp({
     secret: SECRET,
+    driver: db,
     deliveries,
     failures,
     tasks,
@@ -327,9 +328,59 @@ describe('inbound github pull_request webhook (T-D3)', () => {
     expect((await dup.json()).duplicate).toBe(true);
   });
 
+  it('rolls back status, prRef and ledger together and replays after a mid-write failure (F-11)', async () => {
+    await seedTask('gt_tx', 'awaiting_merge', 31);
+    const event = closedEvent(true);
+    event.pull_request.number = 31;
+    event.pull_request.html_url = 'https://github.com/o/r/pull/31/files';
+    event.pull_request.head.ref = 'growth-agent/gt_tx';
+    const body = JSON.stringify(event);
+    const signature = signGithubBody(SECRET, body);
+
+    // Fail the ledger write inside the transaction: the status flip and the
+    // prRef patch must roll back with it.
+    const failingDeliveries = {
+      record: async () => {
+        throw new Error('ledger write failed');
+      },
+    } as unknown as GithubWebhookRepository;
+    const failingApp = createGithubWebhookApp({
+      secret: SECRET,
+      driver: db,
+      deliveries,
+      failures,
+      tasks,
+      txDeliveries: () => failingDeliveries,
+      now: () => NOW,
+    });
+    const failed = await pushRaw(failingApp, { body, signature, delivery: 'guid-31-closed' });
+    expect(failed.status).toBe(500);
+    expect(((await failed.json()) as { retryable?: boolean }).retryable).toBe(true);
+
+    const rolledBack = await tasks.get('gt_tx');
+    expect(rolledBack?.status).toBe('awaiting_merge');
+    expect(rolledBack?.prRef?.url).toBe('https://github.com/o/r/pull/31');
+    expect(await deliveries.find(githubDeliveryId('o/r', 31, 'closed-merged'))).toBeUndefined();
+
+    // Redelivery after the transient failure commits once and advances.
+    const retried = await pushRaw(app, { body, signature, delivery: 'guid-31-closed' });
+    expect(retried.status).toBe(200);
+    expect((await tasks.get('gt_tx'))?.status).toBe('verifying');
+    expect((await tasks.get('gt_tx'))?.prRef?.url).toBe('https://github.com/o/r/pull/31/files');
+    expect((await deliveries.find(githubDeliveryId('o/r', 31, 'closed-merged')))?.processingResult).toBe(
+      'accepted',
+    );
+
+    // A further redelivery is deduped: no second transition, no extra row.
+    const duplicate = await pushRaw(app, { body, signature, delivery: 'guid-31-closed' });
+    expect(((await duplicate.json()) as { duplicate?: boolean }).duplicate).toBe(true);
+    expect((await tasks.get('gt_tx'))?.status).toBe('verifying');
+  });
+
   it('returns 503 when no secret is configured', async () => {
     const noSecretApp = createGithubWebhookApp({
       secret: '',
+      driver: db,
       deliveries,
       failures,
       tasks,
