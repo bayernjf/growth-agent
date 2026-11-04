@@ -25,7 +25,6 @@ function config(overrides: Partial<AppConfig> = {}): AppConfig {
     draftMode: 'inbox',
     draftInboxDir: '/tmp/drafts',
     githubMode: 'off',
-    githubBaseBranch: 'main',
     reportDir: '/tmp/reports',
     zeusWebhookMaxSkewSeconds: 300,
     ...overrides,

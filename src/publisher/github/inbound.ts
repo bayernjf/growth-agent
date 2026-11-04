@@ -32,9 +32,10 @@
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { GrowthAgentError } from '../../errors.js';
+import type { StorageDriver } from '../../storage/driver.js';
 import { assertTaskTransition } from '../../task/state-machine.js';
 import type { GrowthTaskStatus, PrRef } from '../../task/types.js';
-import type { GrowthTaskRepository } from '../../task/repository.js';
+import { GrowthTaskRepository } from '../../task/repository.js';
 import { ChannelFailureRepository } from '../../connector/zeus/webhook-repository.js';
 import {
   githubDeliveryId,
@@ -92,9 +93,13 @@ export function normalizeAction(event: GithubPullRequestEvent): string {
 
 export interface GithubInboundDeps {
   secret: string;
+  driver: StorageDriver;
   deliveries: GithubWebhookRepository;
   failures: ChannelFailureRepository;
   tasks: GrowthTaskRepository;
+  /** Build repositories bound to a transaction handle (tests inject fakes). */
+  txTasks?: (tx: StorageDriver) => GrowthTaskRepository;
+  txDeliveries?: (tx: StorageDriver) => GithubWebhookRepository;
   now: () => string;
 }
 
@@ -102,6 +107,9 @@ export interface GithubInboundResult {
   status: number;
   body: Record<string, unknown>;
 }
+
+/** Internal marker: task row vanished between the guarded update and commit. */
+class TaskVanishedError extends Error {}
 
 function failureBody(
   code: string,
@@ -373,30 +381,67 @@ export async function handleInboundGithubEvent(
   if (finalStatus === undefined) {
     throw new Error('desired transition chain must not be empty');
   }
-  const changed = await deps.tasks.setStatus(task.id, finalStatus, now);
-  if (desired.patchPrRef === true) {
-    await deps.tasks.patch(task.id, { prRef: prRefFrom(event) }, now);
-  }
-  await deps.deliveries.record({
-    id,
-    prNumber,
-    eventType: 'pull_request',
-    action,
-    taskId: task.id,
-    signatureValid: true,
-    processingResult: 'accepted',
-    eventPayload: event,
-    createdAt: now,
-    updatedAt: now,
-  });
-  if (changed === 0) {
+
+  // F-11 (2026-11-02 review): status, optional prRef patch and the delivery
+  // ledger are one atomic unit. Previously three independent writes meant a
+  // crash after setStatus but before deliveries.record left the task advanced
+  // and the event un-ledgered, so GitHub's retry re-drove the state machine
+  // (or was rejected as drift). With one transaction a mid-write failure
+  // rolls back everything and a redelivery replays cleanly — the ledger row
+  // (ON CONFLICT DO NOTHING) keeps the re-entry idempotent once committed.
+  try {
+    await deps.driver.withTransaction(async (tx) => {
+      const txTasks = deps.txTasks?.(tx) ?? new GrowthTaskRepository(tx);
+      const txDeliveries = deps.txDeliveries?.(tx) ?? new GithubWebhookRepository(tx);
+      const changed = await txTasks.setStatus(task.id, finalStatus, now);
+      if (changed === 0) throw new TaskVanishedError(task.id);
+      if (desired.patchPrRef === true) {
+        await txTasks.patch(task.id, { prRef: prRefFrom(event) }, now);
+      }
+      await txDeliveries.record({
+        id,
+        prNumber,
+        eventType: 'pull_request',
+        action,
+        taskId: task.id,
+        signatureValid: true,
+        processingResult: 'accepted',
+        eventPayload: event,
+        createdAt: now,
+        updatedAt: now,
+      });
+    });
+  } catch (err) {
+    if (err instanceof TaskVanishedError) {
+      return {
+        status: 500,
+        body: failureBody(
+          'INTERNAL_ERROR',
+          `growth task ${err.message} vanished during state transition`,
+          true,
+          { taskId: err.message },
+        ),
+      };
+    }
+    // Nothing committed: tell GitHub to retry. The failure row is written
+    // outside the rolled-back transaction so the operator sees the cause.
+    deps.failures
+      .upsert({
+        channel: 'github_webhook',
+        reason: 'TRANSACTION_FAILED',
+        externalRef: String(prNumber),
+        retryable: true,
+        lastError: err instanceof Error ? err.message : 'transaction failed',
+        now: deps.now(),
+      })
+      .catch(() => undefined);
     return {
       status: 500,
       body: failureBody(
         'INTERNAL_ERROR',
-        `growth task ${task.id} vanished during state transition`,
+        'failed to persist the state transition and delivery ledger',
         true,
-        { taskId: task.id },
+        { taskId: task.id, prNumber, action },
       ),
     };
   }

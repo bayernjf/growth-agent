@@ -5,7 +5,6 @@
 export interface AppConfig {
   host: string;
   port: number;
-  apiToken?: string | undefined;
   dbDriver: 'sqlite' | 'postgres';
   sqlitePath: string;
   /** zeus decision kernel integration (T-A3). off = deterministic offline. */
@@ -63,12 +62,11 @@ export interface AppConfig {
   githubMode: 'off' | 'online';
   /** PAT with repo scope (least privilege); server-side only, never logged. */
   githubToken?: string | undefined;
-  /** Default target repository owner/login for openChange. */
-  githubOwner?: string | undefined;
-  /** Default target repository name for openChange. */
-  githubRepo?: string | undefined;
-  /** Base branch PRs are opened against (default main). */
-  githubBaseBranch: string;
+  /**
+   * Target repository owner/name and base branch are NOT global config: each
+   * site in config/sites/*.json owns them (F-05), so one deployment can serve
+   * several repositories without a shared default.
+   */
   /** Shared secret for verifying X-Hub-Signature-256 inbound PR events. */
   githubWebhookSecret?: string | undefined;
   /** §11.1 JSON map of provider -> micros per unit; malformed fails closed. */
@@ -97,7 +95,6 @@ export function loadConfig(): AppConfig {
   return {
     host: process.env.GA_HOST ?? '127.0.0.1',
     port: num('GA_PORT', 8790),
-    apiToken: process.env.GA_API_TOKEN || undefined,
     dbDriver,
     sqlitePath: process.env.GA_SQLITE_PATH ?? './data/growth-agent.db',
     zeusMode,
@@ -128,9 +125,6 @@ export function loadConfig(): AppConfig {
     draftInboxDir: process.env.GA_DRAFT_INBOX_DIR ?? './data/drafts',
     githubMode,
     githubToken: process.env.GA_GITHUB_TOKEN || undefined,
-    githubOwner: process.env.GA_GITHUB_OWNER || undefined,
-    githubRepo: process.env.GA_GITHUB_REPO || undefined,
-    githubBaseBranch: process.env.GA_GITHUB_BASE_BRANCH || 'main',
     githubWebhookSecret: process.env.GA_GITHUB_WEBHOOK_SECRET || undefined,
     costRates: process.env.GA_COST_RATES || undefined,
     reportDir: process.env.GA_REPORT_DIR ?? './data/reports',

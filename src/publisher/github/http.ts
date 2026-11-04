@@ -89,7 +89,7 @@ export class GitHubPublisher implements SitePublisher {
   constructor(config: GitHubPublisherConfig) {
     if (!config.token || !config.owner || !config.repo) {
       throw GrowthAgentErrors.credentialMissing(
-        'GA_GITHUB_MODE=online requires GA_GITHUB_TOKEN, GA_GITHUB_OWNER and GA_GITHUB_REPO',
+        'GitHub publisher requires a token and a target owner/repo (per-site config)',
       );
     }
     this.owner = config.owner;

@@ -32,7 +32,6 @@ const offlineConfig: AppConfig = {
   draftMode: 'inbox',
   draftInboxDir: '/tmp/drafts',
   githubMode: 'off',
-  githubBaseBranch: 'main',
   reportDir: '/tmp/reports',
   zeusWebhookMaxSkewSeconds: 300,
 };
@@ -90,8 +89,6 @@ describe('checkCredentialPresence (fail-closed boot matrix)', () => {
     );
     expect(github?.missing).toEqual([
       'GA_GITHUB_TOKEN',
-      'GA_GITHUB_OWNER',
-      'GA_GITHUB_REPO',
       'GA_GITHUB_WEBHOOK_SECRET(>=16)',
     ]);
     const loom = checkCredentialPresence({ ...offlineConfig, loomMode: 'online' }).find(

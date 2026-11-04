@@ -6,8 +6,87 @@ import type { StorageDriver } from '../driver.js';
  * without it fails closed with an actionable error instead of silently
  * falling back to another dialect.
  *
- * Business SQL uses `?` placeholders; this driver converts them to `$1..$n`.
+ * Business SQL uses `?` placeholders; this driver converts them to `$1..$n`
+ * (see `toDollarParams` below for the literal/comment-aware scanner).
  */
+/**
+ * Convert business `?` placeholders to `$1..$n` while copying SQL text
+ * verbatim everywhere else (F-14, 2026-11-02 review). A plain global
+ * `replace(/\?/g)` would also rewrite a `?` inside a string literal, a quoted
+ * identifier or a comment; the extra `$n` then shifts every following
+ * placeholder so parameters bind to the wrong column (or fail outright).
+ *
+ * Skipped regions (copied unchanged):
+ *   - single-quoted strings (with '' escapes)
+ *   - double-quoted identifiers (with "" escapes)
+ *   - -- line comments and (nested) block comments
+ * Literal text such as `$1` or `$foo` is never touched; only bare `?`
+ * placeholders outside those regions consume the next parameter.
+ */
+export function toDollarParams(sql: string): { text: string; count: number } {
+  let text = '';
+  let count = 0;
+  let i = 0;
+  while (i < sql.length) {
+    const ch = sql[i];
+    if (ch === "'" || ch === '"') {
+      const quote = ch;
+      text += ch;
+      i++;
+      while (i < sql.length) {
+        const inner = sql[i] as string;
+        text += inner;
+        i++;
+        if (inner === quote) {
+          if (sql[i] === quote) {
+            text += quote;
+            i++;
+          } else {
+            break;
+          }
+        }
+      }
+      continue;
+    }
+    if (ch === '-' && sql[i + 1] === '-') {
+      while (i < sql.length && sql[i] !== '\n') {
+        text += sql[i] as string;
+        i++;
+      }
+      continue;
+    }
+    if (ch === '/' && sql[i + 1] === '*') {
+      let depth = 1;
+      text += '/*';
+      i += 2;
+      while (i < sql.length && depth > 0) {
+        if (sql[i] === '*' && sql[i + 1] === '/') {
+          text += '*/';
+          i += 2;
+          depth--;
+        } else if (sql[i] === '/' && sql[i + 1] === '*') {
+          text += '/*';
+          i += 2;
+          depth++;
+        } else {
+          text += sql[i] as string;
+          i++;
+        }
+      }
+      continue;
+    }
+    if (ch === '?') {
+      count++;
+      text += `$${count}`;
+      i++;
+      continue;
+    }
+    text += ch as string;
+    i++;
+  }
+  return { text, count };
+}
+
 export class PostgresDriver implements StorageDriver {
   readonly dialect = 'postgres' as const;
   // Minimal structural surface of pg.Client used here.
@@ -40,14 +119,8 @@ export class PostgresDriver implements StorageDriver {
     return new PostgresDriver(client);
   }
 
-  private static toDollarParams(sql: string): { text: string; count: number } {
-    let count = 0;
-    const text = sql.replace(/\?/g, () => `$${++count}`);
-    return { text, count };
-  }
-
   async all<T>(sql: string, params: readonly unknown[] = []): Promise<T[]> {
-    const { text } = PostgresDriver.toDollarParams(sql);
+    const { text } = toDollarParams(sql);
     const result = await this.client.query(text, [...params]);
     return result.rows as T[];
   }
@@ -58,7 +131,7 @@ export class PostgresDriver implements StorageDriver {
   }
 
   async run(sql: string, params: readonly unknown[] = []): Promise<{ changes: number }> {
-    const { text } = PostgresDriver.toDollarParams(sql);
+    const { text } = toDollarParams(sql);
     const result = await this.client.query(text, [...params]);
     return { changes: result.rowCount };
   }

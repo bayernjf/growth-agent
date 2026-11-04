@@ -20,16 +20,16 @@ jobs:
           node-version: ${{ matrix.node-version }}
 
       - name: Install dependencies
-        run: npm install
-      - name: Build (for migration CLI)
-        run: npm run build
-      - name: Verify paired migrations (sqlite + postgres)
-        run: npm run check:migrations
+        run: npm ci
       - name: Typecheck
         run: npm run typecheck
       - name: Lint
         run: npm run lint
+      - name: Verify paired migrations (sqlite + postgres)
+        run: npm run check:migrations
       - name: Unit + contract tests
         run: npm test
+      - name: Build (for migration CLI and smoke)
+        run: npm run build
       - name: Offline end-to-end smoke
         run: npm run smoke:offline

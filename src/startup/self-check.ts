@@ -78,8 +78,8 @@ export function checkCredentialPresence(config: AppConfig): CredentialPresence[]
   if (config.githubMode === 'online') {
     const missing: string[] = [];
     if (!config.githubToken) missing.push('GA_GITHUB_TOKEN');
-    if (!config.githubOwner) missing.push('GA_GITHUB_OWNER');
-    if (!config.githubRepo) missing.push('GA_GITHUB_REPO');
+    // F-05: owner/repo/base branch come from each site's config/sites/*.json,
+    // so there is no deployment-wide repository to require here.
     if ((config.githubWebhookSecret ?? '').length < 16) missing.push('GA_GITHUB_WEBHOOK_SECRET(>=16)');
     out.push({ connector: 'github', checked: true, ok: missing.length === 0, missing });
   } else {
