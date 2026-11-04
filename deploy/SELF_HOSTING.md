@@ -92,7 +92,7 @@ docker compose exec batch node --experimental-sqlite dist/cli/batch.js productio
 | GSC OAuth 客户端 | `GA_GSC_MODE=online`、`GA_GSC_CLIENT_ID`、`GA_GSC_CLIENT_SECRET` | installed-app 流程，scope 仅 `webmasters.readonly`；refresh token 用 AES-256-GCM 密封后写入 `gsc_tokens` 卷 |
 | 主密钥 | `GA_GROWTH_MASTER_KEY` | ≥32 字符随机串；加密 GSC token，与密文分卷存放，**丢失即无法解密 token**，需重新授权 |
 | SERP | `GA_SERP_MODE=online`、`GA_SERP_DATAFORSEO_LOGIN`、`GA_SERP_DATAFORSEO_PASSWORD` | 记在你自己的供应商账户计费 |
-| GitHub PAT | `GA_GITHUB_MODE=online`、`GA_GITHUB_TOKEN`、`GA_GITHUB_OWNER`、`GA_GITHUB_REPO` | 最小 repo contents + pull-requests 写权限；bot 只开 PR 不合并 |
+| GitHub PAT | `GA_GITHUB_MODE=online`、`GA_GITHUB_TOKEN` | 最小 repo contents + pull-requests 写权限；bot 只开 PR 不合并。目标 owner/repo/baseBranch 在 `config/sites/*.json` 按站点配置，无全局默认 |
 | zeus 鉴权 | `GA_ZEUS_URL`、`GA_ZEUS_TOKEN`（= `ZEUS_INTERNAL_TOKEN`）、`GA_ZEUS_WEBHOOK_SECRET`（≥16 字符） | webhook secret 在 zeus 侧 list 永不回显 |
 | GitHub webhook | `GA_GITHUB_WEBHOOK_SECRET`（≥16 字符） | 仓库 Webhook settings 配同一值；回调 `POST /webhooks/github`，Content-Type application/json |
 | 成本估算 | `GA_COST_RATES` | JSON `{"provider": micros/unit}`，格式错误启动即失败；留空则成本记 0 |
