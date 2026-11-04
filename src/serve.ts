@@ -72,6 +72,7 @@ async function main(): Promise<void> {
     '/webhooks/github',
     createGithubWebhookApp({
       secret: config.githubWebhookSecret ?? '',
+      driver,
       deliveries: new GithubWebhookRepository(driver),
       failures,
       tasks,

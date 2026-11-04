@@ -252,6 +252,7 @@ async function postGithub(pr, action, merged, when, sha) {
   });
   const app = createGithubWebhookApp({
     secret: SECRET,
+    driver,
     tasks, deliveries: githubDeliveries, failures: channelFailures,
     now: () => when.toISOString(),
   });
