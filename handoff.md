@@ -1,5 +1,7 @@
 # Handoff
 
+> **2026-11-06 补登：dev → main 已于 2026-11-05 经 PR #10 合并（合并前 CI 全绿）；实测 origin/main 与 origin/dev 内容完全一致（git diff 为空）。**
+
 State of growth-agent as of 2026-10-28.
 
 > 一句话：**W11 把「装配完成但没人调用」的循环接成了真正可运行的东西**——批次有了
