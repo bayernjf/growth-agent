@@ -7,6 +7,21 @@ State of growth-agent as of 2026-10-28.
 > GSC 的 online 传输也从占位实现换成了真代码。剩余阻塞全部在真实凭据/真实属性验证，
 > 外加一个已知缺口：零凭据的离线 fixture 产不出候选。
 
+## 2026-11-05 只读复核（表述修正）
+
+- `config/sites/*.json` 的 `github.owner`/`repo`/`baseBranch` **均已是真实值**
+  （`bayernjf/bayjf`、`bayernjf/job-agent-landing`、`bayernjf/zeus-landing`），
+  不存在"owner/repo 待填"；PAT 属 env（`GA_GITHUB_TOKEN`），不属站点配置。
+- 真实待办修正为以下四条，均非代码可清：
+  1. 两个 `*-landing` 的 GSC `siteUrl` 仍是 `pages.dev` 占位
+     （`job-agent-landing.pages.dev` / `zeus-landing.pages.dev`，见 `config/sites/README.md`），
+     需替换为已验证的正式 GSC property URL；
+  2. 部署宿主 `./config/sites` 副本与仓内版本同步（宿主状态本地无法核对）；
+  3. `GA_GITHUB_TOKEN`（最小权限 PAT）与 webhook secret 未配；
+  4. 真实 GSC OAuth、DataForSEO key 缺失（见汇总 A 组）。
+- 远程已建：`git@github.com:bayernjf/growth-agent.git`（`dev`/`main` 均在，本地同步）；
+  AGENTS.md 中"未授权不 push"的规则本身继续有效。
+
 ## 已验证（本机实测，不是文档转述）
 
 - `npm run check:all` 五门全绿：**35 文件 / 329 测试**（W10 基线 32/289）。
