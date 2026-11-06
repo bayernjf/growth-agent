@@ -25,6 +25,8 @@ jobs:
         run: npm run typecheck
       - name: Lint
         run: npm run lint
+      - name: Verify site configs have no placeholder GSC URLs
+        run: npm run check:site-urls
       - name: Verify paired migrations (sqlite + postgres)
         run: npm run check:migrations
       - name: Unit + contract tests
