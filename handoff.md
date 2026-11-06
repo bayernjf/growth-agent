@@ -15,14 +15,67 @@ State of growth-agent as of 2026-10-28.
   （`bayernjf/bayjf`、`bayernjf/job-agent-landing`、`bayernjf/zeus-landing`），
   不存在"owner/repo 待填"；PAT 属 env（`GA_GITHUB_TOKEN`），不属站点配置。
 - 真实待办修正为以下四条，均非代码可清：
-  1. 两个 `*-landing` 的 GSC `siteUrl` 仍是 `pages.dev` 占位
-     （`job-agent-landing.pages.dev` / `zeus-landing.pages.dev`，见 `config/sites/README.md`），
-     需替换为已验证的正式 GSC property URL；
-  2. 部署宿主 `./config/sites` 副本与仓内版本同步（宿主状态本地无法核对）；
+  1. ~~两个 `*-landing` 的 GSC `siteUrl` 仍是 `pages.dev` 占位~~ **2026-11-06 已改为正式域**，
+     来源见下一节；
+  2. 部署宿主 `./config/sites` 副本与仓内版本同步（宿主状态本地无法核对），
+     覆盖步骤见下一节末尾；
   3. `GA_GITHUB_TOKEN`（最小权限 PAT）与 webhook secret 未配；
   4. 真实 GSC OAuth、DataForSEO key 缺失（见汇总 A 组）。
 - 远程已建：`git@github.com:bayernjf/growth-agent.git`（`dev`/`main` 均在，本地同步）；
   AGENTS.md 中"未授权不 push"的规则本身继续有效。
+
+## 2026-11-06 GSC 正式域名与占位校验
+
+- 两个 `*-landing` 的 `gsc.siteUrl` 已改为正式域，来源均为对应 landing 仓的权威文件：
+  - `zeus-landing.json` → `https://zeus.bayjf.com/`：`zeus-landing/src/consts.ts`
+    的 `SITE_URL = "https://zeus.bayjf.com"`；`zeus-landing/docs/DEPLOYMENT.md`
+    「自定义域名」记录该域已生效（HTTPS 200，CNAME `zeus → zeus-landing.pages.dev`）。
+  - `job-agent-landing.json` → `https://job-agent.bayjf.com/`：
+    `job-agent-landing/astro.config.mjs` 的 `site`、`README.md` 与
+    `docs/DEPLOYMENT.md` 均把该域列为自定义主入口。
+- 新增 `scripts/check-site-urls.mjs` / `npm run check:site-urls`，已接入 `check:all`
+  与 `.github/workflows/ci.yml`。命中 `*.pages.dev`、`*.workers.dev`、`example.com`、
+  `localhost`、`placeholder`、`<...>` 模板时退出码 1，并打印
+  `<文件>: gsc.siteUrl ...`。
+- 仍未验证：两个正式域在 GSC 中是否已添加为 property、以及 property 类型。
+  配置按 URL-prefix 形态填写（协议 + 尾斜杠）；若 GSC 中是 Domain property
+  （`sc-domain:`），需按实际属性改写。
+
+### 宿主 `./config/sites` 以仓内为准的覆盖步骤
+
+`docker-compose.yml` 把宿主 `./config/sites` 只读挂到 `/app/config/sites`，会覆盖
+镜像内副本，所以宿主副本落后时会复活 pages.dev 占位。宿主机不在本机，以下命令在
+部署机执行：
+
+1. 取仓内最新版本：
+   ```bash
+   git -C <growth-agent 仓库路径> fetch origin dev
+   git -C <growth-agent 仓库路径> checkout dev
+   git -C <growth-agent 仓库路径> pull --ff-only
+   ```
+2. 只读比对，先看差异：
+   ```bash
+   diff -ru <growth-agent 仓库路径>/config/sites <部署目录>/config/sites
+   ```
+3. 备份宿主副本：
+   ```bash
+   cp -a <部署目录>/config/sites <部署目录>/config/sites.bak-$(date +%Y%m%d-%H%M%S)
+   ```
+4. 以仓内为准覆盖，删除宿主多余文件：
+   ```bash
+   rsync -a --delete <growth-agent 仓库路径>/config/sites/ <部署目录>/config/sites/
+   ```
+5. 校验宿主副本：
+   ```bash
+   node <growth-agent 仓库路径>/scripts/check-site-urls.mjs <部署目录>/config/sites
+   ```
+6. 绑定挂载实时生效，无需重建容器；确认容器内是同一份：
+   ```bash
+   docker compose exec orchestrator cat /app/config/sites/zeus-landing.json
+   docker compose exec orchestrator cat /app/config/sites/job-agent-landing.json
+   ```
+7. 若第 2 步发现宿主上有仓内没有的站点文件，先确认是否要并入仓内再执行
+   `--delete`，避免误删唯一副本；`rsync` 前已备份，可随时回退。
 
 ## 已验证（本机实测，不是文档转述）
 

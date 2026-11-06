@@ -19,9 +19,10 @@
     "migrate:status": "node --experimental-sqlite scripts/migrate.mjs status",
     "migrate:pg:up": "node scripts/migrate.mjs up --driver postgres",
     "migrate:pg:status": "node scripts/migrate.mjs status --driver postgres",
+    "check:site-urls": "node scripts/check-site-urls.mjs",
     "check:migrations": "bash scripts/check-migrations.sh",
     "smoke:offline": "sh scripts/dogfood-smoke.sh",
-    "check:all": "npm run check:migrations && npm run typecheck && npm run lint && npm run test && npm run build"
+    "check:all": "npm run check:site-urls && npm run check:migrations && npm run typecheck && npm run lint && npm run test && npm run build"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.6",
