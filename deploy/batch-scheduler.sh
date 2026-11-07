@@ -7,10 +7,17 @@
 #   daily      morning batch: candidates -> zeus D2 human review
 #   production approved (drafting) tasks -> QA gates -> open a PR (never merge)
 #   verify     next-day GSC recheck of merged tasks
+#   health     last 30 complete days must each have a successful run
 #
-# All three are safe to run every tick: `daily` is guarded by same-day
-# idempotency, `verify` by an already-checked-today guard, and `production`
-# only acts on tasks a human has approved. A tick that finds nothing is a no-op.
+# The health step is the continuity alarm (#10): any missed day or day with no
+# successful run exits 1 on the same tick, so `docker compose logs batch` and
+# `docker compose ps` show the gap the day it happens instead of thirty days
+# later. It only reads the run ledger on the reports volume; it never writes.
+#
+# All three batch steps are safe to run every tick: `daily` is guarded by
+# same-day idempotency, `verify` by an already-checked-today guard, and
+# `production` only acts on tasks a human has approved. A tick that finds
+# nothing is a no-op. `health` is read-only.
 #
 # `report` and `packet` are deliberately NOT in the loop: writeWeeklyReport and
 # writeDogfoodPacket version their output instead of overwriting it, so an
@@ -52,5 +59,8 @@ while true; do
   fi
   run_step production
   run_step verify
+  # A gap is logged by run_step above; it must not stop the loop, because the
+  # next tick can still cover the day.
+  run_step health
   sleep "$INTERVAL"
 done
