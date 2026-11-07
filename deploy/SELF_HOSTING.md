@@ -64,6 +64,25 @@ docker compose logs -f batch
 docker compose exec batch node --experimental-sqlite dist/cli/batch.js production --site bayjf.com
 ```
 
+#### 连跑可见性（health）
+
+每个 `batch` 命令都会向运行台账追加一行（默认 `$GA_REPORT_DIR/run-ledger.jsonl`，
+可用 `GA_RUN_LEDGER` 指定绝对路径）。台账是本地 JSONL：一次运行一条，记录时间、
+命令、站点、状态（ok / skipped / failed）与耗时。
+
+`daily` 之后调度器自动跑 `health`：检查最近 30 个**完整日**（不含今天）每天是否
+至少有一次成功运行。任一天缺失时输出 `health: GAP — ...` 并以 1 退出，断档当天早上
+就出现在日志里，而不是等一个月后的复盘：
+
+```bash
+docker compose logs batch | grep 'health:'
+# 手动检查（可改窗口长度）
+docker compose exec batch node --experimental-sqlite dist/cli/batch.js health --days 7
+```
+
+把 `health` 的非零退出接到现有告警通道（日志采集即可），30 天连跑才有证明。
+台账只依赖本地磁盘，不写数据库、不增加外部调用。
+
 `report` / `packet` **不在循环里**：它们会生成带版本号的新文件而不是覆盖，放进
 小时循环会把 reports 卷刷满。请单独排期调用。
 
