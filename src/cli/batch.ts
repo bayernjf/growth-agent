@@ -50,6 +50,7 @@ import {
   formatHistory,
   readRunLedger,
   runLedgerPath,
+  utcDayKey,
   type RunStatus,
 } from '../report/run-ledger.js';
 import { buildWeeklyReport, writeWeeklyReport } from '../report/weekly.js';
@@ -71,7 +72,7 @@ const USAGE = `usage: batch <${COMMANDS.join('|')}> --site <siteId> [--day YYYY-
   verify      next-day GSC recheck of merged tasks
   report      write the versioned weekly operating report
   packet      write the 30-day dogfood data packet
-  health      last N complete days must each have a successful run
+  health      last N complete days must each have a successful daily run
               (--days, default 30; exit 1 when any day is missing)
   history     print the run ledger for the last N calendar days
               (--days, default 7; inspection only, exit 0)
@@ -158,6 +159,9 @@ async function main(argv: readonly string[]): Promise<void> {
     const siteFilter = flag(argv, '--site') ?? process.env.GA_SITE_ID;
     const report = assessCoverage(readRunLedger(ledgerPath), {
       days: parseDays(flag(argv, '--days')),
+      // The morning batch is the heartbeat: production/verify only derive from
+      // tasks it created, so they must not mask a day `daily` never completed.
+      command: 'daily',
       ...(siteFilter === undefined ? {} : { site: siteFilter }),
     });
     console.log(formatCoverage(report));
@@ -169,7 +173,11 @@ async function main(argv: readonly string[]): Promise<void> {
   // can see the actual cadence instead of trusting the cron config.
   if (command === 'history') {
     const ledgerPath = runLedgerPath(config.reportDir);
-    console.log(formatHistory(readRunLedger(ledgerPath), { days: parseHistoryDays(flag(argv, '--days')) });
+    console.log(
+      formatHistory(readRunLedger(ledgerPath), {
+        days: parseHistoryDays(flag(argv, '--days')),
+      }),
+    );
     return;
   }
 
@@ -356,6 +364,7 @@ async function main(argv: readonly string[]): Promise<void> {
     try {
       appendRunRecord(ledgerPath, {
         ts: startedAt.toISOString(),
+        day: utcDayKey(day),
         command,
         site: site.id,
         status: runStatus,

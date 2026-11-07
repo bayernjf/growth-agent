@@ -24,6 +24,9 @@ export type RunStatus = 'ok' | 'skipped' | 'failed';
 export interface RunRecord {
   /** ISO timestamp when the command started (UTC). */
   ts: string;
+  /** UTC run date the command acted on (`--day`), YYYY-MM-DD. Older lines
+   *  without it fall back to the ts day. */
+  day?: string;
   command: string;
   site?: string;
   status: RunStatus;
@@ -41,6 +44,8 @@ export interface CoverageOptions {
   now?: Date;
   /** When set, only records for this site count toward coverage. */
   site?: string;
+  /** When set, only this command counts toward coverage (e.g. `daily`). */
+  command?: string;
 }
 
 export interface CoverageReport {
@@ -119,11 +124,14 @@ export function readRunLedger(ledgerPath: string): RunRecord[] {
         records.push({
           ts: parsed.ts,
           command: parsed.command,
-          site: typeof parsed.site === 'string' ? parsed.site : undefined,
           status: parsed.status,
           durationMs: typeof parsed.durationMs === 'number' ? parsed.durationMs : 0,
-          reason: typeof parsed.reason === 'string' ? parsed.reason : undefined,
-          summary: typeof parsed.summary === 'string' ? parsed.summary : undefined,
+          ...(typeof parsed.day === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(parsed.day)
+            ? { day: parsed.day }
+            : {}),
+          ...(typeof parsed.site === 'string' ? { site: parsed.site } : {}),
+          ...(typeof parsed.reason === 'string' ? { reason: parsed.reason } : {}),
+          ...(typeof parsed.summary === 'string' ? { summary: parsed.summary } : {}),
         });
       }
     } catch {
@@ -146,8 +154,11 @@ export function assessCoverage(
 ): CoverageReport {
   const now = options.now ?? new Date();
   const requestedDays = Math.max(1, Math.trunc(options.days));
-  const inScope =
-    options.site === undefined ? records : records.filter(r => r.site === options.site);
+  const inScope = records.filter(
+    record =>
+      (options.site === undefined || record.site === options.site) &&
+      (options.command === undefined || record.command === options.command),
+  );
 
   const okDays = new Set<string>();
   let firstDay: string | null = null;
@@ -159,7 +170,9 @@ export function assessCoverage(
   for (const record of inScope) {
     const parsed = new Date(record.ts);
     if (Number.isNaN(parsed.getTime())) continue;
-    const key = utcDayKey(parsed);
+    // Key by the day the run acted on (`--day`), not by wall clock: a
+    // backfilled `daily --day 2026-11-05` covers that day.
+    const key = record.day ?? utcDayKey(parsed);
     if (firstDay === null || key < firstDay) firstDay = key;
     if (record.status === 'ok') {
       okRecords += 1;
@@ -267,8 +280,9 @@ export function formatCoverage(report: CoverageReport): string {
 /** One-line history entry; `ts` sorts lexicographically because it is UTC ISO. */
 export function formatRunRecord(record: RunRecord): string {
   const site = record.site === undefined ? '' : ` ${record.site}`;
+  const day = record.day === undefined ? '' : ` day=${record.day}`;
   const detail = record.summary ?? record.reason;
-  return `${record.ts} ${record.command} ${record.status}${site} ${record.durationMs}ms${
+  return `${record.ts} ${record.command} ${record.status}${site}${day} ${record.durationMs}ms${
     detail === undefined ? '' : ` ${detail}`
   }`;
 }
@@ -286,9 +300,13 @@ export function formatHistory(
   const days = Math.max(1, Math.trunc(options.days));
   const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   const start = addUtcDays(today, -(days - 1));
+  const startKey = utcDayKey(start);
+  const endKey = utcDayKey(today);
   const selected = records.filter(record => {
     const parsed = new Date(record.ts);
-    return !Number.isNaN(parsed.getTime()) && parsed.getTime() >= start.getTime();
+    if (Number.isNaN(parsed.getTime())) return false;
+    const key = record.day ?? utcDayKey(parsed);
+    return key >= startKey && key <= endKey;
   });
   const header = `history: ${utcDayKey(start)}..${utcDayKey(today)} — ${selected.length} run(s)`;
   if (selected.length === 0) return `${header}: none recorded.`;
