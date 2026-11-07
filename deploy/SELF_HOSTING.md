@@ -90,7 +90,7 @@ docker compose exec batch node --experimental-sqlite dist/cli/batch.js productio
 | 凭据 | 变量 | 说明 |
 |---|---|---|
 | GSC OAuth 客户端 | `GA_GSC_MODE=online`、`GA_GSC_CLIENT_ID`、`GA_GSC_CLIENT_SECRET` | installed-app 流程，scope 仅 `webmasters.readonly`；refresh token 用 AES-256-GCM 密封后写入 `gsc_tokens` 卷 |
-| 主密钥 | `GA_GROWTH_MASTER_KEY` | ≥32 字符随机串；加密 GSC token，与密文分卷存放，**丢失即无法解密 token**，需重新授权 |
+| 主密钥 | `GA_GROWTH_MASTER_KEY` | 必须解码为 32 字节：64 位 hex 或 32 字节 base64；加密 GSC token，与密文分卷存放，**丢失即无法解密 token**，需重新授权 |
 | SERP | `GA_SERP_MODE=online`、`GA_SERP_DATAFORSEO_LOGIN`、`GA_SERP_DATAFORSEO_PASSWORD` | 记在你自己的供应商账户计费 |
 | GitHub PAT | `GA_GITHUB_MODE=online`、`GA_GITHUB_TOKEN` | 最小 repo contents + pull-requests 写权限；bot 只开 PR 不合并。目标 owner/repo/baseBranch 在 `config/sites/*.json` 按站点配置，无全局默认 |
 | zeus 鉴权 | `GA_ZEUS_URL`、`GA_ZEUS_TOKEN`（= `ZEUS_INTERNAL_TOKEN`）、`GA_ZEUS_WEBHOOK_SECRET`（≥16 字符） | webhook secret 在 zeus 侧 list 永不回显 |
@@ -120,7 +120,7 @@ docker compose exec batch node --experimental-sqlite dist/cli/batch.js productio
   自行构建一个包含 `pg` 的派生镜像（`FROM growth-agent:local` 后 `npm i pg`），
   或在外部使用 SQLite 备份。迁移在容器启动时自动执行（幂等）。
 - Postgres 备份：`db-backup` 服务每日 `pg_dump`（gzip）到 `backups` 卷，默认
-  保留 7 天（`RETENTION_DAYS` / `BACKUP_INTERVAL_SECONDS` 可调）。
+  保留 7 天（宿主 `.env` 中 `BACKUP_RETENTION_DAYS` / `BACKUP_INTERVAL_SECONDS` 可调）。
 - **GSC token 卷单独备份**：`gsc_tokens` 是密文，备份时同时确认
   `GA_GROWTH_MASTER_KEY` 已在凭据管理器中另存；只有密文没有主密钥无法恢复。
 - SQLite 模式：对 `agent_data` 卷做每日文件快照（停写窗口或使用 LVM/CoW）。
