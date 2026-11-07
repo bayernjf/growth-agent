@@ -56,7 +56,8 @@ zeus 探活、启动对账结果）。任何 online 模式缺凭据、或 zeus �
 
 orchestrator 进程只提供 healthz 和两个入站 webhook；真正跑批的是 `batch` 服务
 （`deploy/batch-scheduler.sh`，镜像内无 cron，沿用 `db-backup` 的 sleep-loop）。
-每个 tick 依次执行 `daily` → `production` → `verify`，三步都幂等，空 tick 是 no-op：
+每个 tick 依次执行 `daily` → `production` → `verify` → `health`，前三个批次步骤都
+幂等，空 tick 是 no-op：
 
 ```bash
 docker compose logs -f batch
@@ -64,27 +65,37 @@ docker compose logs -f batch
 docker compose exec batch node --experimental-sqlite dist/cli/batch.js production --site bayjf.com
 ```
 
-#### 连跑可见性（health）
-
-每个 `batch` 命令都会向运行台账追加一行（默认 `$GA_REPORT_DIR/run-ledger.jsonl`，
-可用 `GA_RUN_LEDGER` 指定绝对路径）。台账是本地 JSONL：一次运行一条，记录时间、
-命令、站点、状态（ok / skipped / failed）与耗时。
-
-`daily` 之后调度器自动跑 `health`：检查最近 30 个**完整日**（不含今天）每天是否
-至少有一次成功运行。任一天缺失时输出 `health: GAP — ...` 并以 1 退出，断档当天早上
-就出现在日志里，而不是等一个月后的复盘：
-
-```bash
-docker compose logs batch | grep 'health:'
-# 手动检查（可改窗口长度）
-docker compose exec batch node --experimental-sqlite dist/cli/batch.js health --days 7
-```
-
-把 `health` 的非零退出接到现有告警通道（日志采集即可），30 天连跑才有证明。
-台账只依赖本地磁盘，不写数据库、不增加外部调用。
-
 `report` / `packet` **不在循环里**：它们会生成带版本号的新文件而不是覆盖，放进
 小时循环会把 reports 卷刷满。请单独排期调用。
+
+#### 连续运行可见性（run ledger / health）
+
+每次 `batch <command>` 调用都会向 `GA_REPORT_DIR` 下的 `run-ledger.jsonl` 追加
+一行：命令、站点、状态（`ok` / `skipped` / `failed`）、耗时、结果摘要，失败时还
+有原因。它是普通文件，随 `reports` 卷持久化，不写数据库，也不改变任何业务默认值。
+
+```bash
+# 最近 7 天实际跑了什么（含今天，用来核对真实节奏）
+docker compose exec batch node --experimental-sqlite dist/cli/batch.js history --days 7
+# 最近 30 个完整日必须每天有成功记录；有缺口时退出码为 1
+docker compose exec batch node --experimental-sqlite dist/cli/batch.js health --days 30 --site bayjf.com
+```
+
+调度器每个 tick 在 `daily` → `production` → `verify` 之后跑一次 `health`；失败只
+打印到 stderr，不终止循环。`batch` 服务同时用同一个检查作为 compose healthcheck
+（覆盖镜像自带的 `:8790` 检查——这个容器里没有服务监听该端口）。所以某天漏跑会在
+当天的 tick 上以 `health: GAP — ...` 出现在 `docker compose logs batch`，并让
+`docker compose ps` 显示 `unhealthy`，不需要等三十天后再翻周报。
+
+- 今天不算缺口：只有完整日（UTC）进入检查窗口，给当天重试留出时间。
+- 检查对象是 `daily`：`production` / `verify` 只处理 `daily` 建出的任务，不能让它们
+  掩盖一个缺失的上午批次；其它命令仍会进 `history`，只是不参与覆盖判定。
+- 账本第一条记录之前的日期不要求覆盖，新部署不会一上来就报 30 天缺口。
+- `skipped`（同一天已跑过）不是缺口；`failed` 若当天后续重试成功则不算缺口，
+  但仍会在 `health` 输出里列出失败次数与最近一次原因。
+- 历史回放用 `--day` 重跑指定日期，例如
+  `docker compose exec batch node --experimental-sqlite dist/cli/batch.js daily --site bayjf.com --day 2026-11-05`；
+  `history` 只读取账本本身，不会重放外部副作用。
 
 审批通过（zeus → `drafting`）的任务需要一份草稿才能真正开 PR。默认草稿来源是
 操作者收件箱 `GA_DRAFT_INBOX_DIR`（compose 里为 `/data/drafts`）：
@@ -177,6 +188,7 @@ docker compose up -d orchestrator
 | GSC 401 | OAuth 已撤销，重新走授权流程 |
 | SERP 402 | 供应商账户欠费，充值后自动恢复 |
 | channel 段出现失败 | 查 `channel_failures` 与周报 "Channel health"；4xx 业务错不重试，429/5xx 有界退避 3 次 |
+| `docker compose ps` 中 batch 为 `unhealthy`，或日志出现 `health: GAP` | 读 `reports` 卷的 `run-ledger.jsonl`；按提示的缺失日期补跑 `batch daily --day <日期>`，下一个 tick 的 `health` 会恢复 |
 
 ## 9. 不做的事
 
