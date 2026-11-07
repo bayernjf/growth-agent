@@ -17,7 +17,7 @@ GSC 只读授权与 SERP API key 用户自带（BYOK），发布最后一步永�
 
 growth-agent 是编排外壳，与既有 Tier0 内核**只走 HTTP / openapi，不改内核一行**：
 
-- `zeus :3020`：决策分级、SLA 两阶段超时、审批审计、生命周期 webhook
+- `zeus :8787`：决策分级、SLA 两阶段超时、审批审计、生命周期 webhook
 - `growth-os :8788`：信号引擎（采集/去重/打分/洞察）、provider 端口模式
 - `loom`：13 段链内容生产、审核台、`final_id`（以 loom openapi 为准）
 - `atlas`：NL 生成 / 反思
