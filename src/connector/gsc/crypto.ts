@@ -29,36 +29,57 @@ export interface SealedToken {
   updatedAt: string;
 }
 
+const BASE64_KEY = /^[A-Za-z0-9+/]+={0,2}$/;
+
+/**
+ * Classify the operator-supplied master key by what it actually decodes to.
+ *
+ * The runtime contract is 32 decoded bytes, not 32 characters: 64 hex chars
+ * or base64 of 32 bytes. `Buffer.from(x, 'base64')` silently drops non-alphabet
+ * characters instead of throwing, so a character-count check would let values
+ * like 32 CJK chars (or any non-base64 text) pass boot and only fail later in
+ * `sealToken`/`openSealedToken`.
+ */
+export function inspectMasterKey(
+  raw: string | undefined,
+): { key: Buffer } | { problem: 'missing' | 'format' | 'length'; detail: string } {
+  if (raw === undefined || raw.trim() === '') {
+    return {
+      problem: 'missing',
+      detail: 'GA_GROWTH_MASTER_KEY is not set (design §8: AES-256 key, env-only)',
+    };
+  }
+  const trimmed = raw.trim();
+  let bytes: Buffer;
+  if (/^[0-9a-fA-F]{64}$/.test(trimmed)) {
+    bytes = Buffer.from(trimmed, 'hex');
+  } else if (BASE64_KEY.test(trimmed) && trimmed.length % 4 !== 1) {
+    bytes = Buffer.from(trimmed, 'base64');
+  } else {
+    return {
+      problem: 'format',
+      detail:
+        'GA_GROWTH_MASTER_KEY has an invalid format: 64 hex chars or base64 of a 32-byte AES-256 key',
+    };
+  }
+  if (bytes.length !== MASTER_KEY_BYTES) {
+    return {
+      problem: 'length',
+      detail: `GA_GROWTH_MASTER_KEY decodes to ${bytes.length} bytes; AES-256 requires ${MASTER_KEY_BYTES}`,
+    };
+  }
+  return { key: bytes };
+}
+
 /**
  * Decode the operator-supplied master key into exactly 32 bytes.
  * Accepts 64-char hex OR base64 of 32 bytes. Anything else is fail-closed —
  * we never fall back to a default/dev key.
  */
 export function decodeMasterKey(raw: string | undefined): Buffer {
-  if (raw === undefined || raw.trim() === '') {
-    throw GrowthAgentErrors.credentialStorageInvalid(
-      'GA_GROWTH_MASTER_KEY is not set (design §8: AES-256 key, env-only)',
-    );
-  }
-  const trimmed = raw.trim();
-  let bytes: Buffer;
-  if (/^[0-9a-fA-F]{64}$/.test(trimmed)) {
-    bytes = Buffer.from(trimmed, 'hex');
-  } else {
-    try {
-      bytes = Buffer.from(trimmed, 'base64');
-    } catch {
-      throw GrowthAgentErrors.credentialStorageInvalid(
-        'GA_GROWTH_MASTER_KEY must be 64 hex chars or base64 of 32 bytes',
-      );
-    }
-  }
-  if (bytes.length !== MASTER_KEY_BYTES) {
-    throw GrowthAgentErrors.credentialStorageInvalid(
-      `GA_GROWTH_MASTER_KEY decodes to ${bytes.length} bytes; AES-256 requires ${MASTER_KEY_BYTES}`,
-    );
-  }
-  return bytes;
+  const inspection = inspectMasterKey(raw);
+  if ('key' in inspection) return inspection.key;
+  throw GrowthAgentErrors.credentialStorageInvalid(inspection.detail);
 }
 
 /** Encrypt a plaintext record; `updatedAt` defaults to now (injectable in tests). */

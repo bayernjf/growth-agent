@@ -12,6 +12,7 @@
 // the same gate the boot sequence ran.
 
 import { parseCostRates } from '../cost/pricing.js';
+import { inspectMasterKey } from '../connector/gsc/crypto.js';
 import { reconcileDecisions, type ReconcileSummary } from '../reconcile/reconcile.js';
 import type { ZeusDecisionClient, ZeusSelfCheckResult } from '../connector/zeus/types.js';
 import { ChannelFailureRepository } from '../connector/zeus/webhook-repository.js';
@@ -51,7 +52,18 @@ export function checkCredentialPresence(config: AppConfig): CredentialPresence[]
     const missing: string[] = [];
     if (!config.gscClientId) missing.push('GA_GSC_CLIENT_ID');
     if (!config.gscClientSecret) missing.push('GA_GSC_CLIENT_SECRET');
-    if ((config.growthMasterKey ?? '').length < 32) missing.push('GA_GROWTH_MASTER_KEY(>=32 chars)');
+    // The runtime requires 32 decoded bytes, so classify the key by decoding
+    // it here — a character-count check would pass keys that seal/open rejects.
+    const keyInspection = inspectMasterKey(config.growthMasterKey);
+    if ('problem' in keyInspection) {
+      const label =
+        keyInspection.problem === 'missing'
+          ? 'not set'
+          : keyInspection.problem === 'format'
+            ? 'invalid format, want 64 hex or base64-of-32-bytes'
+            : keyInspection.detail.replace('GA_GROWTH_MASTER_KEY ', '');
+      missing.push(`GA_GROWTH_MASTER_KEY(${label})`);
+    }
     out.push({ connector: 'gsc', checked: true, ok: missing.length === 0, missing });
   } else {
     out.push({ connector: 'gsc', checked: false, ok: true, missing: [] });
