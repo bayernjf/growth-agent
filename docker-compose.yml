@@ -17,7 +17,10 @@ x-logging: &default-logging
 services:
   orchestrator:
     build: .
-    image: growth-agent:local
+    # GA_IMAGE_TAG keeps the previous build so code can be rolled back:
+    # `docker tag growth-agent:local growth-agent:<stamp>` before a rebuild,
+    # then `GA_IMAGE_TAG=<stamp> docker compose up -d`. Default stays :local.
+    image: growth-agent:${GA_IMAGE_TAG:-local}
     env_file:
       - {path: .env, required: false}
     environment:
