@@ -178,8 +178,72 @@ docker compose exec batch node --experimental-sqlite dist/cli/batch.js health --
   dump 失败时容器以非零码退出，由 `restart: unless-stopped` 重启：
   `docker compose ps` 会显示 Restarting，日志出现 `[pg-backup] backup failed`。
   **不再 `|| true` 静默吞失败。**
-- **恢复尚未演练**：`pg_dump` 产物从未在临时库执行过 `pg_restore` 并比对行数，
-  按备份基线属于"有备份、未验证"。恢复步骤待补，不作为可用能力宣称。
+- **存储位置限制**：`backups` 卷与 `pgdata` 卷在同一台主机上。**主机或磁盘损坏时
+  备份与数据库同时丢失**，这不是异地容灾；跨机副本尚未实现。
+- **恢复已演练（2026-11-08）**：本机没有历史 dump（没有运行中的 growth-agent
+  compose 栈或卷，也没有 `*.sql.gz`），因此用 `db-backup` 同款命令现场生成 dump，
+  再恢复到一个独立的临时库。**这证明的是"同款命令产出的 dump 可恢复"，不是
+  "恢复了一份历史备份"。**
+
+  ```bash
+  # 临时实例（独立容器与端口，不动生产栈）
+  docker run -d --name drill-growth-agent-pg \
+    -e POSTGRES_USER=drill -e POSTGRES_PASSWORD=drill \
+    -e POSTGRES_DB=growth_agent_src -p 127.0.0.1:55432:5432 \
+    pgvector/pgvector:pg16
+
+  # 建 schema：按文件名顺序应用 db/migrations/postgres/*.sql
+  docker exec -i drill-growth-agent-pg \
+    psql -v ON_ERROR_STOP=1 -U drill -d growth_agent_src < db/migrations/postgres/001_growth_tasks.sql
+  # ... 002 至 009 同样执行
+
+  # 写入代表行后，用 sidecar 同款命令生成 dump
+  docker exec drill-growth-agent-pg sh -c \
+    'PGPASSWORD=drill pg_dump --no-owner --clean --if-exists -U drill -h 127.0.0.1 growth_agent_src' \
+    | gzip > /tmp/drill-growth-agent/growth_agent_src-<stamp>.sql.gz
+
+  # 恢复到第二个库
+  docker exec drill-growth-agent-pg psql -U drill -d postgres \
+    -c 'CREATE DATABASE growth_agent_restored'
+  gzip -dc /tmp/drill-growth-agent/growth_agent_src-<stamp>.sql.gz \
+    | docker exec -i drill-growth-agent-pg \
+      psql -v ON_ERROR_STOP=1 -U drill -d growth_agent_restored
+  ```
+
+  实际输出（2026-11-08）：
+
+  ```text
+  DUMP=/tmp/drill-growth-agent/growth_agent_src-20261108T135958Z.sql.gz 2345 bytes
+  GZIP_OK
+  RESTORE_EXIT=0
+
+  --- source ---            --- restored ---
+  api_calls=1               api_calls=1
+  channel_failures=1        channel_failures=1
+  github_webhook_deliveries=1  github_webhook_deliveries=1
+  growth_tasks=1            growth_tasks=1
+  gsc_daily_snapshot=1      gsc_daily_snapshot=1
+  sentiment_daily_snapshot=1  sentiment_daily_snapshot=1
+  zeus_webhook_deliveries=1 zeus_webhook_deliveries=1
+  zeus_webhook_nonces=1     zeus_webhook_nonces=1
+  COUNTS_MATCH
+  ```
+
+  8 张表逐表行数与源库一致。未用健康端点做校验：本仓零依赖原则不包含 `pg`，
+  postgres 模式缺 `pg` 会 fail-closed，无法在演练中启动应用；因此以逐表行数作为
+  "恢复可用"的证据。恢复后启动应用并观察 `/healthz` 仍是上线动作，需在带 `pg`
+  的派生镜像上执行。
+
+  生产恢复命令（先恢复到临时库验证，不要直接覆盖）：
+
+  ```bash
+  # 从 backups 卷取 dump（db-backup 容器挂了该卷），恢复到临时库验证
+  docker compose exec -T postgres createdb -U growth growth_agent_restore_check
+  docker compose exec -T db-backup sh -c 'gzip -dc /backups/growth_agent-<stamp>.sql.gz' \
+    | docker compose exec -T postgres psql -U growth -d growth_agent_restore_check
+  # 比对逐表行数后再切换到该库
+  ```
+
 - **GSC token 卷单独备份**：`gsc_tokens` 是密文，备份时同时确认
   `GA_GROWTH_MASTER_KEY` 已在凭据管理器中另存；只有密文没有主密钥无法恢复。
 - SQLite 模式：对 `agent_data` 卷做每日文件快照（停写窗口或使用 LVM/CoW）。
