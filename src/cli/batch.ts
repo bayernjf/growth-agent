@@ -29,11 +29,15 @@ import { ApiCallRepository } from '../cost/api-call-repository.js';
 import { parseCostRates, Pricing } from '../cost/pricing.js';
 import { CostRecorder } from '../cost/recorder.js';
 import { createGscReadonlyProvider } from '../connector/gsc/registry.js';
+import { OfflineGscProvider } from '../connector/gsc/offline.js';
+import type { GscRow } from '../connector/gsc/types.js';
+import type { GscSnapshotRow } from '../connector/gsc/snapshot-repository.js';
 import { createAdsReadonlyProvider } from '../connector/ads/registry.js';
 import { GscSnapshotRepository } from '../connector/gsc/snapshot-repository.js';
 import { createSentimentProvider } from '../connector/sentiment/registry.js';
 import { SentimentSnapshotRepository } from '../connector/sentiment/snapshot-repository.js';
 import { createSerpKeywordProvider } from '../connector/serp/registry.js';
+import { OfflineSerpProvider } from '../connector/serp/offline.js';
 import { createZeusDecisionClient } from '../connector/zeus/registry.js';
 import {
   ChannelFailureRepository,
@@ -56,6 +60,9 @@ import {
 } from '../report/run-ledger.js';
 import { buildWeeklyReport, writeWeeklyReport } from '../report/weekly.js';
 import { DailyScriptRunner } from '../scheduler/daily.js';
+import { scoreFixCandidates, scoreWriteCandidates, selectDailyCandidates } from '../scheduler/candidates.js';
+import { trailingInclusive } from '../scheduler/dates.js';
+import { formatDemoSelection, formatNoCandidates } from '../scheduler/diagnose.js';
 import { runProductionSweep } from '../scheduler/production-sweep.js';
 import { runVerificationBatch } from '../scheduler/verification.js';
 import { migrateUp } from '../storage/migrate.js';
@@ -63,7 +70,7 @@ import { openDriver } from '../storage/open.js';
 import { GrowthTaskRepository } from '../task/repository.js';
 import type { GrowthTask } from '../task/types.js';
 
-const COMMANDS = ['daily', 'production', 'verify', 'report', 'packet', 'health', 'history'] as const;
+const COMMANDS = ['daily', 'production', 'verify', 'report', 'packet', 'demo', 'health', 'history'] as const;
 type Command = (typeof COMMANDS)[number];
 
 const USAGE = `usage: batch <${COMMANDS.join('|')}> --site <siteId> [--day YYYY-MM-DD]
@@ -73,6 +80,7 @@ const USAGE = `usage: batch <${COMMANDS.join('|')}> --site <siteId> [--day YYYY-
   verify      next-day GSC recheck of merged tasks
   report      write the versioned weekly operating report
   packet      write the 30-day dogfood data packet
+  demo        print fixture candidates for a demo site (no DB writes)
   health      last N complete days must each have a successful daily run
               (--days, default 30; exit 1 when any day is missing)
   history     print the run ledger for the last N calendar days
@@ -135,6 +143,57 @@ function selectSite(sites: SiteConfig[], requested: string | undefined): SiteCon
 /** GSC property origin, used to turn a draft slug into an absolute page URL. */
 function siteOrigin(site: SiteConfig): string {
   return new URL(site.gsc.siteUrl).origin;
+}
+
+function snapshotRows(siteId: string, date: string, rows: readonly GscRow[]): GscSnapshotRow[] {
+  return rows.map(row => ({
+    siteUrl: siteId,
+    date,
+    dimensionKey: row.keys[0] ?? '',
+    clicks: row.clicks,
+    impressions: row.impressions,
+    position: row.position,
+  }));
+}
+
+/**
+ * `batch demo`: run the same scoring functions against the bundled fixture so
+ * a zero-credential operator can see what the loop produces. It deliberately
+ * bypasses the database, zeus and the site's real connectors — no task is
+ * created and nothing is submitted.
+ */
+async function runDemo(site: SiteConfig, day: Date): Promise<void> {
+  const gsc = new OfflineGscProvider();
+  const serp = new OfflineSerpProvider();
+  const recent = trailingInclusive(day, 28, 1);
+  const prior = trailingInclusive(day, 28, 29);
+  const recentRows = await gsc.queryAnalytics({
+    siteUrl: site.id,
+    startDate: recent.start,
+    endDate: recent.end,
+    dimensions: ['page'],
+  });
+  const priorRows = await gsc.queryAnalytics({
+    siteUrl: site.id,
+    startDate: prior.start,
+    endDate: prior.end,
+    dimensions: ['page'],
+  });
+  const fixes = scoreFixCandidates(
+    snapshotRows(site.id, recent.end, recentRows),
+    snapshotRows(site.id, prior.end, priorRows),
+  );
+  const ideas = (await Promise.all(site.keywordSeeds.map(seed => serp.keywordIdeas(seed)))).flat();
+  const serpByQuery = new Map<string, Awaited<ReturnType<typeof serp.serp>>>();
+  for (const idea of ideas) {
+    serpByQuery.set(idea.keyword, await serp.serp(idea.keyword));
+  }
+  const rankTrack = await serp.rankTrack(new URL(site.gsc.siteUrl).hostname, site.watchQueries);
+  const writes = scoreWriteCandidates({ ideas, rankTrack, serpByQuery });
+  const selection = selectDailyCandidates(writes, fixes);
+  for (const line of formatDemoSelection(site.id, selection)) {
+    console.log(line);
+  }
 }
 
 async function main(argv: readonly string[]): Promise<void> {
@@ -222,6 +281,12 @@ async function main(argv: readonly string[]): Promise<void> {
   const site = selectSite(sites, flag(argv, '--site') ?? process.env.GA_SITE_ID);
   const day = parseDay(flag(argv, '--day'));
 
+  // demo is the zero-credential preview: fixtures only, no DB, no zeus.
+  if (command === 'demo') {
+    await runDemo(site, day);
+    return;
+  }
+
   // Run ledger (#10): every invocation appends one line so `health` can prove
   // the loop actually ran. A ledger write failure is a warning, never a
   // business failure.
@@ -294,6 +359,16 @@ async function main(argv: readonly string[]): Promise<void> {
         console.log(
           `daily: deferred ${run.deferredWrites.length} write / ${run.deferredFixes.length} fix candidate(s)`,
         );
+        if (
+          run.submitted.length === 0
+          && run.submitFailures.length === 0
+          && run.deferredWrites.length === 0
+          && run.deferredFixes.length === 0
+        ) {
+          for (const line of formatNoCandidates(config, site.id)) {
+            console.log(line);
+          }
+        }
         runSummary = `submitted=${run.submitted.length} deferredWrites=${run.deferredWrites.length} deferredFixes=${run.deferredFixes.length} submitFailures=${run.submitFailures.length}`;
         break;
       }
