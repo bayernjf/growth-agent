@@ -40,7 +40,24 @@ describe('gsc AES-256-GCM token cipher (§8)', () => {
     expect(decodeMasterKey(key.toString('base64')).equals(key)).toBe(true);
     // 32 non-hex chars take the base64 path -> 24 decoded bytes.
     expect(() => decodeMasterKey('00'.repeat(16))).toThrowError(/decodes to 24 bytes/);
-    expect(() => decodeMasterKey('not-a-key')).toThrowError(/AES-256 requires 32/);
+    expect(() => decodeMasterKey('not-a-key')).toThrowError(/invalid format/);
+  });
+
+  it('validates by decoded bytes, not character count', () => {
+    const key = hexKey();
+    const base64 = key.toString('base64');
+    // Padded (44 chars) and unpadded (43 chars) base64 both decode to 32 bytes.
+    expect(decodeMasterKey(base64).equals(key)).toBe(true);
+    expect(decodeMasterKey(base64.replace(/=+$/, '')).equals(key)).toBe(true);
+    // 32-byte raw text outside the base64 alphabet -> format error.
+    expect(() => decodeMasterKey('raw-secret-with-illegal++chars!!')).toThrowError(/invalid format/);
+    // 32 CJK chars -> format error (base64 decoding would silently drop them).
+    expect(() => decodeMasterKey('密'.repeat(32))).toThrowError(/invalid format/);
+    // Overlong hex is base64-shaped and decodes to 96 bytes -> length error.
+    expect(() => decodeMasterKey('a'.repeat(128))).toThrowError(/decodes to 96 bytes/);
+    // Empty/whitespace is reported as missing, not as a bad length.
+    expect(() => decodeMasterKey('')).toThrowError(/is not set/);
+    expect(() => decodeMasterKey('   ')).toThrowError(/is not set/);
   });
 
   it('rejects a wrong master key with a single opaque error (no oracle)', () => {

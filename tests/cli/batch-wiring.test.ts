@@ -11,6 +11,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { runBatch } from '../../src/cli/batch.js';
+import { readRunLedger, runLedgerPath } from '../../src/report/run-ledger.js';
 import { SqliteDriver } from '../../src/storage/sqlite/sqlite-driver.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -79,5 +80,18 @@ describe('batch CLI wiring (F-04)', () => {
     expect(weekly.length).toBeGreaterThan(0);
     const content = await readFile(join(work, 'reports', weekly[0] as string), 'utf8');
     expect(content).toContain('## Sentiment alerts (negative mentions)');
+  });
+
+  it('records each CLI run in the report-volume ledger', async () => {
+    await runBatch(['daily', '--site', 'bayjf.com', '--day', '2026-10-26']);
+    await runBatch(['production', '--site', 'bayjf.com', '--day', '2026-10-26']);
+
+    const records = readRunLedger(runLedgerPath(join(work, 'reports')));
+    expect(records.map((record) => record.command)).toEqual(['daily', 'production']);
+    expect(records[0]?.site).toBe('bayjf.com');
+    expect(records[0]?.day).toBe('2026-10-26');
+    expect(records[0]?.status).toBe('ok');
+    expect(records[0]?.summary).toContain('submitted=');
+    expect(records[1]?.summary).toContain('items=0');
   });
 });

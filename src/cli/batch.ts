@@ -20,7 +20,7 @@
 // failure, 2 usage error.
 
 import { existsSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { loadConfig } from '../config.js';
@@ -43,6 +43,16 @@ import { createDraftProvider } from '../draft/registry.js';
 import { createSitePublisher } from '../publisher/github/registry.js';
 import { GithubWebhookRepository } from '../publisher/github/webhook-repository.js';
 import { buildDogfoodPacket, writeDogfoodPacket } from '../report/dogfood-packet.js';
+import {
+  appendRunRecord,
+  assessCoverage,
+  formatCoverage,
+  formatHistory,
+  readRunLedger,
+  runLedgerPath,
+  utcDayKey,
+  type RunStatus,
+} from '../report/run-ledger.js';
 import { buildWeeklyReport, writeWeeklyReport } from '../report/weekly.js';
 import { DailyScriptRunner } from '../scheduler/daily.js';
 import { runProductionSweep } from '../scheduler/production-sweep.js';
@@ -52,7 +62,7 @@ import { openDriver } from '../storage/open.js';
 import { GrowthTaskRepository } from '../task/repository.js';
 import type { GrowthTask } from '../task/types.js';
 
-const COMMANDS = ['daily', 'production', 'verify', 'report', 'packet'] as const;
+const COMMANDS = ['daily', 'production', 'verify', 'report', 'packet', 'health', 'history'] as const;
 type Command = (typeof COMMANDS)[number];
 
 const USAGE = `usage: batch <${COMMANDS.join('|')}> --site <siteId> [--day YYYY-MM-DD]
@@ -62,6 +72,10 @@ const USAGE = `usage: batch <${COMMANDS.join('|')}> --site <siteId> [--day YYYY-
   verify      next-day GSC recheck of merged tasks
   report      write the versioned weekly operating report
   packet      write the 30-day dogfood data packet
+  health      last N complete days must each have a successful daily run
+              (--days, default 30; exit 1 when any day is missing)
+  history     print the run ledger for the last N calendar days
+              (--days, default 7; inspection only, exit 0)
 
   --site      site config id from config/sites/*.json (or GA_SITE_ID)
   --day       UTC run date, YYYY-MM-DD (default: today)
@@ -87,6 +101,20 @@ function parseDay(raw: string | undefined): Date {
     throw new Error(`--day is not a real calendar date: "${raw}"`);
   }
   return day;
+}
+
+function parseDays(raw: string | undefined): number {
+  if (raw === undefined) return 30;
+  const days = Number.parseInt(raw, 10);
+  if (!Number.isFinite(days) || days <= 0) {
+    throw new Error(`--days must be a positive integer, got "${raw}"`);
+  }
+  return days;
+}
+
+/** History defaults to a week: enough to see the cadence, small enough to read. */
+function parseHistoryDays(raw: string | undefined): number {
+  return raw === undefined ? 7 : parseDays(raw);
 }
 
 function selectSite(sites: SiteConfig[], requested: string | undefined): SiteConfig {
@@ -121,15 +149,56 @@ async function main(argv: readonly string[]): Promise<void> {
   }
 
   const repoRoot = process.env.GA_REPO_ROOT ?? defaultRepoRoot;
+  const config = loadConfig();
+
+  // health is a pure ledger reader: no DB, no site config required, so a
+  // missing site file can never mask a coverage gap. Exit 1 on any gap so
+  // cron surfaces a missed day the next morning.
+  if (command === 'health') {
+    const ledgerPath = runLedgerPath(config.reportDir);
+    const siteFilter = flag(argv, '--site') ?? process.env.GA_SITE_ID;
+    const report = assessCoverage(readRunLedger(ledgerPath), {
+      days: parseDays(flag(argv, '--days')),
+      // The morning batch is the heartbeat: production/verify only derive from
+      // tasks it created, so they must not mask a day `daily` never completed.
+      command: 'daily',
+      ...(siteFilter === undefined ? {} : { site: siteFilter }),
+    });
+    console.log(formatCoverage(report));
+    if (!report.healthy) process.exitCode = 1;
+    return;
+  }
+
+  // history is also a pure ledger reader: it replays what ran so an operator
+  // can see the actual cadence instead of trusting the cron config.
+  if (command === 'history') {
+    const ledgerPath = runLedgerPath(config.reportDir);
+    console.log(
+      formatHistory(readRunLedger(ledgerPath), {
+        days: parseHistoryDays(flag(argv, '--days')),
+      }),
+    );
+    return;
+  }
+
   const sites = loadSiteConfigs(join(repoRoot, 'config', 'sites'));
   const site = selectSite(sites, flag(argv, '--site') ?? process.env.GA_SITE_ID);
   const day = parseDay(flag(argv, '--day'));
 
-  const config = loadConfig();
-  const driver = await openDriver(config);
+  // Run ledger (#10): every invocation appends one line so `health` can prove
+  // the loop actually ran. A ledger write failure is a warning, never a
+  // business failure.
+  const startedAt = new Date();
+  const ledgerPath = runLedgerPath(config.reportDir);
+  let runStatus: RunStatus = 'ok';
+  let runReason: string | undefined;
+  let runSummary: string | undefined;
+
   try {
-    // Idempotent, same as the HTTP server boot.
-    await migrateUp(driver);
+    const driver = await openDriver(config);
+    try {
+      // Idempotent, same as the HTTP server boot.
+      await migrateUp(driver);
 
     const tasks = new GrowthTaskRepository(driver);
     const snapshots = new GscSnapshotRepository(driver);
@@ -177,6 +246,8 @@ async function main(argv: readonly string[]): Promise<void> {
         });
         const run = await runner.run(day);
         if (!run.ran) {
+          runStatus = 'skipped';
+          runReason = run.reason ?? 'unknown';
           console.log(`daily: skipped (${run.reason ?? 'unknown'})`);
           break;
         }
@@ -186,6 +257,7 @@ async function main(argv: readonly string[]): Promise<void> {
         console.log(
           `daily: deferred ${run.deferredWrites.length} write / ${run.deferredFixes.length} fix candidate(s)`,
         );
+        runSummary = `submitted=${run.submitted.length} deferredWrites=${run.deferredWrites.length} deferredFixes=${run.deferredFixes.length} submitFailures=${run.submitFailures.length}`;
         break;
       }
 
@@ -209,6 +281,8 @@ async function main(argv: readonly string[]): Promise<void> {
               : (item.reason ?? '');
           console.log(`production: ${item.taskId} ${item.outcome} ${detail}`.trimEnd());
         }
+        const prs = sweep.items.filter(item => item.outcome === 'pr_opened').length;
+        runSummary = `items=${sweep.items.length} prOpened=${prs}`;
         if (sweep.items.length === 0) {
           console.log('production: no task is awaiting a draft');
         }
@@ -233,6 +307,7 @@ async function main(argv: readonly string[]): Promise<void> {
         for (const item of result.skipped) {
           console.log(`verify: ${item.taskId} skipped (${item.reason})`);
         }
+        runSummary = `checked=${result.checked.length} skipped=${result.skipped.length}`;
         break;
       }
 
@@ -253,7 +328,9 @@ async function main(argv: readonly string[]): Promise<void> {
           },
           day,
         );
-        console.log(`report: ${writeWeeklyReport(config.reportDir, weekly)}`);
+        const reportPath = writeWeeklyReport(config.reportDir, weekly);
+        console.log(`report: ${reportPath}`);
+        runSummary = `report=${basename(reportPath)}`;
         break;
       }
 
@@ -270,12 +347,36 @@ async function main(argv: readonly string[]): Promise<void> {
           day,
           30,
         );
-        console.log(`packet: ${writeDogfoodPacket({ reportDir: config.reportDir }, packet)}`);
+        const packetPath = writeDogfoodPacket({ reportDir: config.reportDir }, packet);
+        console.log(`packet: ${packetPath}`);
+        runSummary = `packet=${basename(packetPath)}`;
         break;
       }
     }
+    } finally {
+      await driver.close();
+    }
+  } catch (err) {
+    runStatus = 'failed';
+    runReason = err instanceof Error ? err.message : String(err);
+    throw err;
   } finally {
-    await driver.close();
+    try {
+      appendRunRecord(ledgerPath, {
+        ts: startedAt.toISOString(),
+        day: utcDayKey(day),
+        command,
+        site: site.id,
+        status: runStatus,
+        durationMs: Date.now() - startedAt.getTime(),
+        ...(runReason === undefined ? {} : { reason: runReason }),
+        ...(runSummary === undefined ? {} : { summary: runSummary }),
+      });
+    } catch (err) {
+      process.stderr.write(
+        `batch: run ledger not written (${err instanceof Error ? err.message : String(err)})\n`,
+      );
+    }
   }
 }
 

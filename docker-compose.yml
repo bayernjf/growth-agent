@@ -84,6 +84,17 @@ services:
       # not require a rebuild.
       - ./config/sites:/app/config/sites:ro
     entrypoint: ["/bin/sh", "/scripts/batch-scheduler.sh"]
+    # Continuity healthcheck (#10): this container runs the batch CLI, not the
+    # server, so the image-level :8790 check can never pass. Replace it with
+    # the run-ledger check so `docker compose ps` turns unhealthy on the first
+    # missed day. The scheduler also logs `health` every tick; both read the
+    # ledger on the reports volume and never touch the database.
+    healthcheck:
+      test: ["CMD-SHELL", "node --experimental-sqlite dist/cli/batch.js health --site \"$BATCH_SITE\""]
+      interval: 30m
+      timeout: 10s
+      retries: 2
+      start_period: 5m
     depends_on:
       postgres: {condition: service_healthy}
       zeus: {condition: service_healthy}

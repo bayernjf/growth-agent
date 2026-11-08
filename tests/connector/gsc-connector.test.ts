@@ -94,8 +94,8 @@ describe('GSC registry discipline (§4.1 / growth-os provider pattern)', () => {
       GA_GSC_CLIENT_SECRET: 'csec',
       GA_GROWTH_MASTER_KEY: 'too-short',
     });
-    expect(() => createGscReadonlyProvider(config)).toThrowError(/AES-256 requires 32/);
-    expect(() => decodeMasterKey('too-short')).toThrowError(/AES-256 requires 32/);
+    expect(() => createGscReadonlyProvider(config)).toThrowError(/invalid format/);
+    expect(() => decodeMasterKey('too-short')).toThrowError(/invalid format/);
   });
 });
 

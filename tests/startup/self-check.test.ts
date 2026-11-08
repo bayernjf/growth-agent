@@ -66,14 +66,55 @@ describe('checkCredentialPresence (fail-closed boot matrix)', () => {
     ]);
   });
 
-  it('requires GSC oauth client and a >=32 char master key', () => {
+  it('requires GSC oauth client creds and a decodable 32-byte master key', () => {
     const presence = checkCredentialPresence({ ...offlineConfig, gscMode: 'online' });
     const gsc = presence.find(p => p.connector === 'gsc');
+    expect(gsc?.ok).toBe(false);
     expect(gsc?.missing).toEqual([
       'GA_GSC_CLIENT_ID',
       'GA_GSC_CLIENT_SECRET',
-      'GA_GROWTH_MASTER_KEY(>=32 chars)',
+      'GA_GROWTH_MASTER_KEY(not set)',
     ]);
+  });
+
+  it('accepts 64-hex and base64 master keys when the other GSC creds exist', () => {
+    const base = {
+      ...offlineConfig,
+      gscMode: 'online' as const,
+      gscClientId: 'id',
+      gscClientSecret: 'sec',
+    };
+    const keys = ['a'.repeat(64), Buffer.from('b'.repeat(32)).toString('base64')];
+    for (const growthMasterKey of keys) {
+      const gsc = checkCredentialPresence({ ...base, growthMasterKey }).find(
+        p => p.connector === 'gsc',
+      );
+      expect(gsc?.ok).toBe(true);
+      expect(gsc?.missing).toEqual([]);
+    }
+  });
+
+  it('rejects master keys that only satisfy a character count', () => {
+    const base = {
+      ...offlineConfig,
+      gscMode: 'online' as const,
+      gscClientId: 'id',
+      gscClientSecret: 'sec',
+    };
+    const cases: Array<[string, RegExp]> = [
+      ['raw-secret-with-illegal++chars!!', /invalid format/],
+      ['密'.repeat(32), /invalid format/],
+      ['0'.repeat(32), /decodes to 24 bytes/],
+      ['a'.repeat(128), /decodes to 96 bytes/],
+      ['', /not set/],
+    ];
+    for (const [growthMasterKey, expected] of cases) {
+      const gsc = checkCredentialPresence({ ...base, growthMasterKey }).find(
+        p => p.connector === 'gsc',
+      );
+      expect(gsc?.ok).toBe(false);
+      expect(gsc?.missing.join(';')).toMatch(expected);
+    }
   });
 
   it('requires SERP and GitHub credentials for their online modes', () => {

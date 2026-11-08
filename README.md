@@ -57,9 +57,13 @@ curl http://127.0.0.1:8790/healthz
 - W11 让循环真正可运行。此前 `DailyScriptRunner`、`runProductionBatch`、
   `runVerificationBatch` 的调用方**只有测试和离线冒烟脚本**：部署后的进程只提供
   healthz 和两个入站 webhook，收到审批也不会做任何事。本 wave：
-  - `dist/cli/batch.js`（`npm run batch -- <daily|production|verify|report|packet>`）
+  - `dist/cli/batch.js`（`npm run batch -- <daily|production|verify|report|packet|health>`）
     让 §5 整条循环可被 cron / compose 调度；`deploy/batch-scheduler.sh` + compose
     `batch` 服务按 tick 依次跑三步（三步都幂等，空 tick 是 no-op）。
+  - 连跑可见性（#10）：每次 `batch` 命令向 `$GA_REPORT_DIR/run-ledger.jsonl`
+    （`GA_RUN_LEDGER` 可覆盖）追加一行运行记录；`batch health --days 30` 校验
+    最近 30 个完整日每天都有成功运行，缺任一天即 `GAP` + 退出 1，调度器在
+    `daily` 之后自动执行，断档当天暴露而不是等月末复盘。
   - migration 007 `growth_tasks.context`：daily 之前只把 query / targetUrl 发给
     zeus 而从不落库，导致生产与复查批次拿不到任务上下文。现在
     `{query, targetUrl, angle}` 随任务持久化，write 任务开 PR 时补记 `publishedUrl`。
