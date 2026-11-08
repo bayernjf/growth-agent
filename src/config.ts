@@ -73,6 +73,17 @@ export interface AppConfig {
   costRates?: string | undefined;
   /** Directory versioned weekly reports are written to (design §5.E). */
   reportDir: string;
+  /**
+   * Optional outbound alert webhook (2026-11-08 handoff P0). Empty/undefined
+   * keeps the loop local-only: exit codes still alarm, nothing is pushed out.
+   */
+  alertWebhookUrl?: string | undefined;
+  /** Optional Bearer token for the webhook; never logged. */
+  alertWebhookToken?: string | undefined;
+  /** `generic` posts `{ text, ... }` (Slack-friendly); `feishu` posts a text card. */
+  alertWebhookFormat?: 'generic' | 'feishu' | undefined;
+  /** Same alert key inside this window is dropped (default 360 minutes). */
+  alertCooldownMinutes?: number | undefined;
 }
 
 function num(name: string, fallback: number): number {
@@ -128,5 +139,10 @@ export function loadConfig(): AppConfig {
     githubWebhookSecret: process.env.GA_GITHUB_WEBHOOK_SECRET || undefined,
     costRates: process.env.GA_COST_RATES || undefined,
     reportDir: process.env.GA_REPORT_DIR ?? './data/reports',
+    alertWebhookUrl: process.env.GA_ALERT_WEBHOOK_URL || undefined,
+    alertWebhookToken: process.env.GA_ALERT_WEBHOOK_TOKEN || undefined,
+    alertWebhookFormat: process.env.GA_ALERT_WEBHOOK_FORMAT === 'feishu' ? 'feishu' : 'generic',
+    // A missed day repeats every tick; six hours keeps one gap to one message.
+    alertCooldownMinutes: num('GA_ALERT_COOLDOWN_MINUTES', 360),
   };
 }
