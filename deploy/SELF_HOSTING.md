@@ -97,6 +97,30 @@ docker compose exec batch node --experimental-sqlite dist/cli/batch.js health --
   `docker compose exec batch node --experimental-sqlite dist/cli/batch.js daily --site bayjf.com --day 2026-11-05`；
   `history` 只读取账本本身，不会重放外部副作用。
 
+#### 外发告警（可选，webhook）
+
+`health` 的退出码和 compose 的 `unhealthy` 只在本机可见；没人盯日志时，断档仍可能
+一整天无人知道。配置 webhook 后，同一处判断会额外 POST 一条消息：
+
+| 变量 | 默认 | 作用 |
+|---|---|---|
+| `GA_ALERT_WEBHOOK_URL` | 空（关闭） | 目标地址；留空时模块完全惰性，行为与之前一致 |
+| `GA_ALERT_WEBHOOK_FORMAT` | `generic` | `generic` 发 `{text,...}`（Slack 可直接用）；`feishu` 发文本卡片 |
+| `GA_ALERT_WEBHOOK_TOKEN` | 空 | 可选 Bearer；不写日志 |
+| `GA_ALERT_COOLDOWN_MINUTES` | `360` | 同一个告警键在该窗口内只发一次 |
+
+覆盖三种情况：命令运行失败（`run_failed`）、覆盖缺口（`coverage_gap`）、账本为空
+（`coverage_empty`）。三条硬约束：
+
+- **不改变退出码**：告警是附加投递。`health` 有缺口仍 exit 1，失败命令仍 exit 1。
+- **去重 + 退避**：键为 `run_failed:<site>:<command>:<day>` 或 `<kind>:<checkedTo>`，
+  6 小时内同一键只发一次；发送失败按 1s/2s 退避重试，共 3 次。
+- **告警失败不拖垮主流程**：webhook 不可达只在 stderr 打一行，不替换原始错误。
+
+去重状态写在 `GA_REPORT_DIR/alert-state.json`（与台账同卷），删掉该文件即可重置窗口。
+
+#### 草稿来源（inbox / loom）
+
 审批通过（zeus → `drafting`）的任务需要一份草稿才能真正开 PR。默认草稿来源是
 操作者收件箱 `GA_DRAFT_INBOX_DIR`（compose 里为 `/data/drafts`）：
 

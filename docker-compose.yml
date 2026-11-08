@@ -72,6 +72,13 @@ services:
       # .env.example). On the /data volume so drafts survive a rebuild.
       GA_DRAFT_INBOX_DIR: /data/drafts
       GA_ZEUS_URL: http://zeus:8787
+      # Outbound alerts (2026-11-08 handoff P0): a coverage gap or a failed
+      # batch round already exits non-zero; these push it out so nobody has to
+      # watch `docker compose logs`. Unset keeps the loop local-only.
+      GA_ALERT_WEBHOOK_URL: ${GA_ALERT_WEBHOOK_URL:-}
+      GA_ALERT_WEBHOOK_TOKEN: ${GA_ALERT_WEBHOOK_TOKEN:-}
+      GA_ALERT_WEBHOOK_FORMAT: ${GA_ALERT_WEBHOOK_FORMAT:-generic}
+      GA_ALERT_COOLDOWN_MINUTES: ${GA_ALERT_COOLDOWN_MINUTES:-360}
       BATCH_SITE: ${BATCH_SITE:-bayjf.com}
       BATCH_INTERVAL_SECONDS: ${BATCH_INTERVAL_SECONDS:-3600}
       BATCH_DAILY_HOUR_UTC: ${BATCH_DAILY_HOUR_UTC:-6}

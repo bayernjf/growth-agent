@@ -61,9 +61,12 @@ curl http://127.0.0.1:8790/healthz
     让 §5 整条循环可被 cron / compose 调度；`deploy/batch-scheduler.sh` + compose
     `batch` 服务按 tick 依次跑三步（三步都幂等，空 tick 是 no-op）。
   - 连跑可见性（#10）：每次 `batch` 命令向 `$GA_REPORT_DIR/run-ledger.jsonl`
-    （`GA_RUN_LEDGER` 可覆盖）追加一行运行记录；`batch health --days 30` 校验
-    最近 30 个完整日每天都有成功运行，缺任一天即 `GAP` + 退出 1，调度器在
-    `daily` 之后自动执行，断档当天暴露而不是等月末复盘。
+    追加一行运行记录；`batch health --days 30` 校验最近 30 个完整日每天都有成功
+    运行，缺任一天即 `GAP` + 退出 1，调度器在 `daily` 之后自动执行，断档当天
+    暴露而不是等月末复盘。
+  - 外发告警：配 `GA_ALERT_WEBHOOK_URL` 后，覆盖缺口、账本为空、命令失败会额外
+    POST 一条消息（`GA_ALERT_WEBHOOK_FORMAT=feishu` 走文本卡片），6 小时内同一
+    告警只发一次；发送失败只警告，**退出码不变**。详见 `deploy/SELF_HOSTING.md`。
   - migration 007 `growth_tasks.context`：daily 之前只把 query / targetUrl 发给
     zeus 而从不落库，导致生产与复查批次拿不到任务上下文。现在
     `{query, targetUrl, angle}` 随任务持久化，write 任务开 PR 时补记 `publishedUrl`。
