@@ -38,7 +38,13 @@ while true; do
   # Wait for postgres (depends_on health covers ordering, but keep the loop
   # resilient to a restarted database container).
   if pg_isready -h "$PGHOST" -U "$PGUSER" -d "$PGDATABASE" >/dev/null 2>&1; then
-    backup_once || true
+    # A failed dump must not be swallowed: exit non-zero so the compose
+    # restart policy and `docker compose ps` make it visible. The old
+    # `|| true` kept the container "healthy" while backups silently stopped.
+    if ! backup_once; then
+      echo "[pg-backup] backup failed; exiting for restart-policy visibility" >&2
+      exit 1
+    fi
   else
     echo "[pg-backup] postgres not ready, retrying next interval" >&2
   fi
