@@ -43,6 +43,7 @@ import { createDraftProvider } from '../draft/registry.js';
 import { createSitePublisher } from '../publisher/github/registry.js';
 import { GithubWebhookRepository } from '../publisher/github/webhook-repository.js';
 import { buildDogfoodPacket, writeDogfoodPacket } from '../report/dogfood-packet.js';
+import { alertStatePath, notifyAlert, type NotifyOptions } from '../report/alert.js';
 import {
   appendRunRecord,
   assessCoverage,
@@ -151,6 +152,27 @@ async function main(argv: readonly string[]): Promise<void> {
   const repoRoot = process.env.GA_REPO_ROOT ?? defaultRepoRoot;
   const config = loadConfig();
 
+  // One outbound channel shared by both alarms (2026-11-08 handoff P0).
+  // No URL means inert: the exit code stays the only alarm, exactly as before.
+  const alertOptions: NotifyOptions = {
+    ...(config.alertWebhookUrl === undefined ? {} : { webhookUrl: config.alertWebhookUrl }),
+    ...(config.alertWebhookToken === undefined ? {} : { token: config.alertWebhookToken }),
+    format: config.alertWebhookFormat ?? 'generic',
+    statePath: alertStatePath(config.reportDir),
+    cooldownMs: (config.alertCooldownMinutes ?? 360) * 60_000,
+  };
+
+  /** Shared logging: a delivery failure is reported, never escalated. */
+  const reportAlert = (outcome: Awaited<ReturnType<typeof notifyAlert>>): void => {
+    if (outcome.status === 'sent') {
+      process.stderr.write(`batch: alert sent (${outcome.attempts} attempt(s))\n`);
+    } else if (outcome.status === 'failed') {
+      process.stderr.write(
+        `batch: alert failed after ${outcome.attempts} attempt(s): ${outcome.error}\n`,
+      );
+    }
+  };
+
   // health is a pure ledger reader: no DB, no site config required, so a
   // missing site file can never mask a coverage gap. Exit 1 on any gap so
   // cron surfaces a missed day the next morning.
@@ -165,7 +187,22 @@ async function main(argv: readonly string[]): Promise<void> {
       ...(siteFilter === undefined ? {} : { site: siteFilter }),
     });
     console.log(formatCoverage(report));
-    if (!report.healthy) process.exitCode = 1;
+    if (!report.healthy) {
+      process.exitCode = 1;
+      const kind = report.totalRecords === 0 ? 'coverage_empty' : 'coverage_gap';
+      // Day-scoped dedupe key: one missing day sends one message, not one per tick.
+      reportAlert(
+        await notifyAlert(
+          {
+            kind,
+            title: `growth-agent health ${kind === 'coverage_empty' ? 'EMPTY' : 'GAP'}`,
+            detail: formatCoverage(report),
+            dedupeKey: `${kind}:${report.checkedTo}`,
+          },
+          alertOptions,
+        ),
+      );
+    }
     return;
   }
 
@@ -359,6 +396,19 @@ async function main(argv: readonly string[]): Promise<void> {
   } catch (err) {
     runStatus = 'failed';
     runReason = err instanceof Error ? err.message : String(err);
+    // Alert, log, then rethrow: the exit code remains the alarm of record and
+    // a failed webhook must not replace the original error.
+    reportAlert(
+      await notifyAlert(
+        {
+          kind: 'run_failed',
+          title: `growth-agent ${command} failed`,
+          detail: `${runReason}\n(site ${site.id}, day ${utcDayKey(day)})`,
+          dedupeKey: `run_failed:${site.id}:${command}:${utcDayKey(day)}`,
+        },
+        alertOptions,
+      ),
+    );
     throw err;
   } finally {
     try {

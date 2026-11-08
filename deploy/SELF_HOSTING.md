@@ -97,6 +97,30 @@ docker compose exec batch node --experimental-sqlite dist/cli/batch.js health --
   `docker compose exec batch node --experimental-sqlite dist/cli/batch.js daily --site bayjf.com --day 2026-11-05`；
   `history` 只读取账本本身，不会重放外部副作用。
 
+#### 外发告警（可选，webhook）
+
+`health` 的退出码和 compose 的 `unhealthy` 只在本机可见；没人盯日志时，断档仍可能
+一整天无人知道。配置 webhook 后，同一处判断会额外 POST 一条消息：
+
+| 变量 | 默认 | 作用 |
+|---|---|---|
+| `GA_ALERT_WEBHOOK_URL` | 空（关闭） | 目标地址；留空时模块完全惰性，行为与之前一致 |
+| `GA_ALERT_WEBHOOK_FORMAT` | `generic` | `generic` 发 `{text,...}`（Slack 可直接用）；`feishu` 发文本卡片 |
+| `GA_ALERT_WEBHOOK_TOKEN` | 空 | 可选 Bearer；不写日志 |
+| `GA_ALERT_COOLDOWN_MINUTES` | `360` | 同一个告警键在该窗口内只发一次 |
+
+覆盖三种情况：命令运行失败（`run_failed`）、覆盖缺口（`coverage_gap`）、账本为空
+（`coverage_empty`）。三条硬约束：
+
+- **不改变退出码**：告警是附加投递。`health` 有缺口仍 exit 1，失败命令仍 exit 1。
+- **去重 + 退避**：键为 `run_failed:<site>:<command>:<day>` 或 `<kind>:<checkedTo>`，
+  6 小时内同一键只发一次；发送失败按 1s/2s 退避重试，共 3 次。
+- **告警失败不拖垮主流程**：webhook 不可达只在 stderr 打一行，不替换原始错误。
+
+去重状态写在 `GA_REPORT_DIR/alert-state.json`（与台账同卷），删掉该文件即可重置窗口。
+
+#### 草稿来源（inbox / loom）
+
 审批通过（zeus → `drafting`）的任务需要一份草稿才能真正开 PR。默认草稿来源是
 操作者收件箱 `GA_DRAFT_INBOX_DIR`（compose 里为 `/data/drafts`）：
 
@@ -151,6 +175,11 @@ docker compose exec batch node --experimental-sqlite dist/cli/batch.js health --
   或在外部使用 SQLite 备份。迁移在容器启动时自动执行（幂等）。
 - Postgres 备份：`db-backup` 服务每日 `pg_dump`（gzip）到 `backups` 卷，默认
   保留 7 天（宿主 `.env` 中 `BACKUP_RETENTION_DAYS` / `BACKUP_INTERVAL_SECONDS` 可调）。
+  dump 失败时容器以非零码退出，由 `restart: unless-stopped` 重启：
+  `docker compose ps` 会显示 Restarting，日志出现 `[pg-backup] backup failed`。
+  **不再 `|| true` 静默吞失败。**
+- **恢复尚未演练**：`pg_dump` 产物从未在临时库执行过 `pg_restore` 并比对行数，
+  按备份基线属于"有备份、未验证"。恢复步骤待补，不作为可用能力宣称。
 - **GSC token 卷单独备份**：`gsc_tokens` 是密文，备份时同时确认
   `GA_GROWTH_MASTER_KEY` 已在凭据管理器中另存；只有密文没有主密钥无法恢复。
 - SQLite 模式：对 `agent_data` 卷做每日文件快照（停写窗口或使用 LVM/CoW）。
@@ -170,11 +199,25 @@ docker compose --profile peers up -d
 ## 7. 升级流程
 
 ```bash
+# 升级前留档当前镜像，作为代码回滚锚点
+docker tag growth-agent:local "growth-agent:$(date -u +%Y%m%d-%H%M)"
+
 git pull && docker compose build orchestrator
 docker compose up -d orchestrator
 # 容器启动时自动跑 migrate:up（sqlite/postgres 配对迁移，幂等）
 # /healthz 变 ready 即完成；v1 接受分钟级停机，不做零停机
 ```
+
+回滚到上一版镜像：
+
+```bash
+GA_IMAGE_TAG=20261108-1200 docker compose up -d orchestrator
+```
+
+本仓没有镜像 registry，`GA_IMAGE_TAG` 指向的镜像只在本机 Dockerd 中；
+**换机或清理 `docker images` 后该 tag 不存在，回滚路径即失效**。要跨机回滚，
+需先 `docker save growth-agent:<tag> | gzip > growth-agent-<tag>.tar.gz` 并异地保存，
+或推送到 registry。这不是与 registry 等价的方案。
 
 迁移只增不改；不要手工修改已应用的迁移文件。
 
