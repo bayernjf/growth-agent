@@ -52,6 +52,21 @@ services:
     restart: unless-stopped
     logging: *default-logging
 
+  # Docker creates named volumes as root:root, but this image runs as node
+  # (1000). On a fresh volume the batch container therefore cannot write
+  # /data/reports/run-ledger.jsonl — it logs EACCES, the ledger stays empty, and
+  # its continuity healthcheck reports "no run recorded ever" indefinitely.
+  # This one-shot fixes ownership before batch starts, so a new clone or a
+  # `docker compose down -v` never has to be repaired by hand.
+  reports-init:
+    image: growth-agent:${GA_IMAGE_TAG:-local}
+    user: "0:0"
+    command: ["sh", "-c", "chown -R 1000:1000 /data/reports"]
+    volumes:
+      - reports:/data/reports
+    restart: "no"
+    logging: *default-logging
+
   batch:
     # Scheduler sidecar. The orchestrator process only serves healthz and the
     # two inbound webhooks, so without this nothing would ever run the daily,
@@ -99,8 +114,13 @@ services:
     # the run-ledger check so `docker compose ps` turns unhealthy on the first
     # missed day. The scheduler also logs `health` every tick; both read the
     # ledger on the reports volume and never touch the database.
+    #
+    # `$$BATCH_SITE` is deliberate: a single `$` is interpolated by Compose on
+    # the host (where BATCH_SITE is normally unset), which renders the command
+    # as `--site ""` and makes the check report an empty ledger forever. The
+    # doubled `$` escapes it so the container's own shell expands the value.
     healthcheck:
-      test: ["CMD-SHELL", "node --experimental-sqlite dist/cli/batch.js health --site \"$BATCH_SITE\""]
+      test: ["CMD-SHELL", "node --experimental-sqlite dist/cli/batch.js health --site \"$$BATCH_SITE\""]
       interval: 30m
       timeout: 10s
       retries: 2
@@ -108,6 +128,7 @@ services:
     depends_on:
       postgres: {condition: service_healthy}
       zeus: {condition: service_healthy}
+      reports-init: {condition: service_completed_successfully}
     restart: unless-stopped
     logging: *default-logging
 
