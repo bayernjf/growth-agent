@@ -141,6 +141,30 @@
 - 修复：signaled 任务纳入 reconcile/重试，或 daily 幂等判断改为「今日是否存在
   未提交到 zeus 的 signaled 任务」。
 
+> **2026-11-11 复核补注（本条已修复，勿再当开放缺陷处理）**
+>
+> 上文是 `d446991` 基线的历史快照，行号已漂移。当前 `dev` 实测：
+>
+> - 采纳的是第一个方案。逐候选 try/catch 已落地
+>   （`src/scheduler/daily.ts:292-297`，失败进 `submitFailures` 而不中断循环）；
+>   `signaled` 出口已落地（`src/reconcile/reconcile.ts:127-165`，从 migration 007
+>   持久化的 candidate context 重提交，失败记 `SIGNALED_RESUBMIT_FAILED` 并留给
+>   下次 reconcile）。回归测试
+>   `tests/scheduler/daily.test.ts:135-200`「isolates a submit failure and
+>   reconcile revives the stranded signaled task (F-07)」；
+>   `fnm exec --using=22.23.4 npx vitest run tests/scheduler/daily.test.ts
+>   tests/report/run-ledger.test.ts` → **20 passed / exit 0**。
+> - **第二个方案（改同日幂等判断）没有采纳，也不应采纳。**
+>   `src/scheduler/daily.ts:106-113` 的 `already_ran_today` 对「每天建一批任务」
+>   这个职责是正确的幂等：当天已建过任务就不该再建。把它改成「存在未提交的
+>   signaled 才放行」会让同日重复建任务重新变成可能。
+> - 现网 `growth-agent.db` 只有 3 条任务，全部 `deciding` 且带
+>   `zeus_decision_id`，**没有任何 signaled 滞留**，即 F-07 的场景当前并未发生。
+> - 同日幂等确实有一个**副作用**，但不在本条范围内：它会让 `batch health` 把
+>   「成功运行早于账本上线」的那一天永久判成 GAP。见
+>   `handoff.md`「2026-11-11 batch unhealthy」与 `deploy/SELF_HOSTING.md` §3.3
+>   「连续运行可见性（run ledger / health）」。
+
 #### F-08 GSC OAuth 握手无入口、state 未校验
 
 - 证据：`startLocalCodeReceiver` / `buildConsentUrl` 在 src/scripts 无任何生产

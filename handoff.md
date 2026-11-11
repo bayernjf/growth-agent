@@ -9,6 +9,99 @@ State of growth-agent as of 2026-10-28.
 > GSC 的 online 传输也从占位实现换成了真代码。剩余阻塞全部在真实凭据/真实属性验证，
 > 外加一个已知缺口：零凭据的离线 fixture 产不出候选。
 
+## 2026-11-11 batch unhealthy：幂等误判更正（只读实测）
+
+**结论先行：`already_ran_today` 是正确的幂等，2026-11-10 也没有漏跑采集。**
+`batch-1` 的 `unhealthy` 是**账本覆盖缺口**，不是业务缺口；此前把它读成「那天没跑／
+幂等挡错了」是误判。本轮为纯只读核查：未跑采集、未写数据库、未改账本、未改代码。
+
+### 实测证据
+
+- 容器：`growth-agent-batch-1`，Created `2026-11-10T13:39:57Z`，
+  `State.Health.Status=unhealthy`，`FailingStreak=26`（2026-11-11T13:05Z 测），
+  保留的 5 次检查全部 `exit=1`，间隔 30m，与 `docker-compose.yml:122-127`
+  （`interval: 30m`、`retries: 2`）一致。
+- `health` 实跑（`docker exec … node --experimental-sqlite dist/cli/batch.js
+  health --site "$BATCH_SITE"`，exit **1**）：
+  `health: GAP — 1/1 complete days missing (2026-11-10) in 2026-11-10..2026-11-10; last ok 2026-11-11T06:29:13.758Z.`
+- 账本 `/data/reports/run-ledger.jsonl`（卷 `growth-agent_reports`）共 **72** 行。
+  按 `day` × `command` 统计 `daily`：**2026-11-10 = 13 skipped / 0 ok**，
+  2026-11-11 = 1 ok / 6 skipped。11-10 的 `ok` 只有 `production` 与 `verify`。
+  13 条 skipped 的 reason 全是 `already_ran_today`。
+- **账本第一条记录**就是 `2026-11-10T12:07:32.896Z daily skipped already_ran_today`。
+- 数据库 `/data/growth-agent.db`（卷 `growth-agent_agent_data`，只读打开
+  `new DatabaseSync(path,{readOnly:true})`）`growth_tasks` 全表只有 **3** 行：
+
+| id | created_at | status | zeus_decision_id |
+|---|---|---|---|
+| `gt_20261110_write_1` | 2026-11-10T09:33:58.793Z | deciding | `dec_offline_gt_20261110_write_1` |
+| `gt_20261110_fix_2` | 2026-11-10T09:33:58.793Z | deciding | `dec_offline_gt_20261110_fix_2` |
+| `gt_20261111_write_1` | 2026-11-11T06:29:13.758Z | deciding | `dec_offline_gt_20261111_write_1` |
+
+### 根因
+
+11-10 的 `daily` **成功跑过**：09:33:58.793Z 建了 1 写 + 1 修两条任务并提交 zeus。
+但那次运行**比账本的第一条记录（12:07:32.896Z）早约 2.5 小时**——账本功能是在那天
+中途才开始写盘的，成功运行没留下 `ok` 行。此后每个 tick 都被同日幂等正确挡成
+`skipped`，于是这一天在账本里永远只有 skipped。
+
+而覆盖判定**只认 `ok`**：`src/report/run-ledger.ts:177-180` 只在
+`status === 'ok'` 时 `okDays.add(key)`，`:221` 对不在 `okDays` 的日子记 missing；
+`health` 又把范围限定为 `command: 'daily'`（`src/cli/batch.ts:241-247`），
+所以 11-10 的 `production` / `verify` 各 13 条 `ok` 也不能替它覆盖。
+
+### 为什么它不会自愈
+
+- **等**：默认窗口 30 天（`src/cli/batch.ts:115-121`），窗口起点被夹到账本首日
+  （`run-ledger.ts:190`）。11-10 会一直留在窗口里，直到 **2026-12-10**；
+  **2026-12-11** 才滚出去。也就是说这个 unhealthy 还会持续约 30 天，前提是
+  11-11 起每天都有 `daily ok`。
+- **补跑**：`deploy/SELF_HOSTING.md` §8 原先给的处置（`batch daily --day <日期>`）
+  对这种缺口**无效**——`--day` 会原样传进 `runner.run(day)`
+  （`src/cli/batch.ts:349`），幂等比较的正是该日期的 `created_at` 前缀
+  （`src/scheduler/daily.ts:106-113`），任务已存在 → 再次 `skipped`。
+  本轮未实跑补跑（那会向账本追加一行），此条为**代码级**结论。
+- **没人被告警**：容器内 `GA_ALERT_WEBHOOK_URL` 为**空**，告警模块完全惰性，
+  GAP 只存在于本机日志与 `docker compose ps`。
+
+容器在 11-10 当天其实是 healthy 的：那时 `today=11-10`、`windowEnd=11-09`，
+窗口起点晚于终点，走 `run-ledger.ts:196-209` 的「warming up」分支返回 healthy；
+跨过 UTC 零点后第一次检查才翻红。此条为**代码级**推导（docker 只保留 5 条检查日志，
+无法实测首次翻红时刻）。
+
+### 顺带更正：F-07 已修复，不是开放缺陷
+
+`docs/reviews/code-review-2026-11-02.md` 的 F-07（signaled 永久滞留）在当前 `dev`
+已修：逐候选 try/catch（`src/scheduler/daily.ts:292-297`）+ reconcile 的 signaled
+出口（`src/reconcile/reconcile.ts:127-165`）。回归测试
+`tests/scheduler/daily.test.ts:135-200`；实跑
+`fnm exec --using=22.23.4 npx vitest run tests/scheduler/daily.test.ts tests/report/run-ledger.test.ts`
+→ **20 passed / exit 0**（仓库 `.nvmrc` 为 22，本机 fnm 默认 20 会假红）。
+现网 3 条任务全为 `deciding`，**无 signaled 滞留**。已在该评审文档 F-07 下追加
+带日期的补注，并明确「改同日幂等判断」这个备选方案不应采纳。
+
+### 本轮改了什么（只有文档）
+
+- `deploy/SELF_HOSTING.md` §3.3：删掉「`skipped`（同一天已跑过）不是缺口」这句
+  **与代码不符**的断言，改为「覆盖只认 ok」+ 区分两种 skipped。
+- `deploy/SELF_HOSTING.md` §8 排障表：把 GAP 处置拆成「真漏跑 → 补跑」与
+  「只有 already_ran_today → 补跑无效」两条。
+- `docs/reviews/code-review-2026-11-02.md`：F-07 追加 2026-11-11 已修复补注。
+- 本文件：本节。
+
+### 待 owner 决策（本轮未动代码）
+
+1. **要不要让 health 承认「任务已建好」的日子**：例如覆盖判定接受
+   `skipped/already_ran_today` 作为该日已完成的证据，或 health 额外查一次
+   `growth_tasks` 当日是否有行。前者纯账本、后者破坏「health 不碰数据库」的现有
+   设计承诺（`docker-compose.yml:112-116`、`src/cli/batch.ts:235-237`）。
+2. **要不要给一次性缺口一个人工出口**：如 `batch health --ack-day <日期>`
+   或允许向账本补写一条带来源标注的 `ok`。两者都是写操作，需明确授权。
+3. **要不要接受现状**：什么都不改，让它红到 2026-12-10。代价是这 30 天里
+   `unhealthy` 失去告警价值——真漏跑会被这条已知红噪声掩盖。
+4. `GA_ALERT_WEBHOOK_URL` 仍为空（与 loom 的 `LOOM_ALERT_WEBHOOK` 同一类问题）：
+   本机之外的断档无人知晓，需要 owner 提供 bot 地址。
+
 ## 2026-11-05 只读复核（表述修正）
 
 - `config/sites/*.json` 的 `github.owner`/`repo`/`baseBranch` **均已是真实值**
@@ -125,6 +218,10 @@ State of growth-agent as of 2026-10-28.
 5. compose 里 sqlite 模式下列 `orchestrator` 与 `batch` 共用一个库文件：写入频率低但
    没有 `SQLITE_BUSY` 重试，多写场景建议切 postgres。
 6. 真实 30 天连跑（T-H4）、dogfood 评审与定价（T-H5）仍卡 owner 决策。
+   T-H4 的计时目前被一条**非业务**的账本缺口污染，见第 7 条。
+7. **`batch health` 把 2026-11-10 判成永久 GAP，容器 unhealthy 会持续到
+   2026-12-10**；采集本身没漏跑，处置需 owner 决策。证据与四个选项见
+   「2026-11-11 batch unhealthy：幂等误判更正」一节。
 
 ## 下一步（建议顺序）
 
