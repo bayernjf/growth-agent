@@ -91,8 +91,13 @@ docker compose exec batch node --experimental-sqlite dist/cli/batch.js health --
 - 检查对象是 `daily`：`production` / `verify` 只处理 `daily` 建出的任务，不能让它们
   掩盖一个缺失的上午批次；其它命令仍会进 `history`，只是不参与覆盖判定。
 - 账本第一条记录之前的日期不要求覆盖，新部署不会一上来就报 30 天缺口。
-- `skipped`（同一天已跑过）不是缺口；`failed` 若当天后续重试成功则不算缺口，
-  但仍会在 `health` 输出里列出失败次数与最近一次原因。
+- 覆盖判定**只认 `ok`**：`skipped` 和 `failed` 都不覆盖任何一天
+  （`src/report/run-ledger.ts:177-180`、`:221`）。`failed` 若当天后续重试成功会留下
+  `ok` 行，因此不算缺口，但失败次数与最近一次原因仍会列在 `health` 输出里。
+- 因此 `skipped` 有两种含义，必须分辨：当天**已有 `ok` 行**时它只是幂等跳过，无害；
+  当天**只有 `skipped`（`already_ran_today`）而没有 `ok` 行**时，该日算缺口，且
+  等待与补跑都消不掉它——任务确实建过，只是那次成功运行没进账本。实例与处置见
+  `handoff.md` 的「2026-11-11 batch unhealthy」一节。
 - 历史回放用 `--day` 重跑指定日期，例如
   `docker compose exec batch node --experimental-sqlite dist/cli/batch.js daily --site bayjf.com --day 2026-11-05`；
   `history` 只读取账本本身，不会重放外部副作用。
@@ -295,7 +300,7 @@ GA_IMAGE_TAG=20261108-1200 docker compose up -d orchestrator
 | GSC 401 | OAuth 已撤销，重新走授权流程 |
 | SERP 402 | 供应商账户欠费，充值后自动恢复 |
 | channel 段出现失败 | 查 `channel_failures` 与周报 "Channel health"；4xx 业务错不重试，429/5xx 有界退避 3 次 |
-| `docker compose ps` 中 batch 为 `unhealthy`，或日志出现 `health: GAP` | 读 `reports` 卷的 `run-ledger.jsonl`；按提示的缺失日期补跑 `batch daily --day <日期>`，下一个 tick 的 `health` 会恢复 |
+| `docker compose ps` 中 batch 为 `unhealthy`，或日志出现 `health: GAP` | 读 `reports` 卷的 `run-ledger.jsonl`，先看缺失日有没有 `daily` 的 `ok` 行。**真漏跑**：补跑 `batch daily --day <日期>`，下一个 tick 的 `health` 会恢复。**缺失日只有 `daily skipped (already_ran_today)`**：任务已经建好，补跑会被同日幂等再次挡成 `skipped`（`src/cli/batch.ts:349` → `src/scheduler/daily.ts:106-113`），`health` 不会恢复；这是账本覆盖缺口而非业务缺口，处置见 `handoff.md` 的「2026-11-11 batch unhealthy」一节 |
 
 ## 9. 不做的事
 
