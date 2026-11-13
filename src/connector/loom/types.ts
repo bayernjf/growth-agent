@@ -73,6 +73,23 @@ export interface LoomTopicDraftRef {
 }
 
 /**
+ * FCW final_id issuance request (POST /api/fcw/assemble). The operator still
+ * supplies loom-side publishing-asset ids in the inbox envelope, but growth-agent
+ * now calls assemble itself so the final_id no longer has to be issued and pasted
+ * out-of-band. On a 409 DuplicateIssuance the already-issued final_id is reused.
+ */
+export interface LoomFinalIssueInput {
+  productSpaceId: string;
+  platform: string;
+  slotId: string;
+  goal: string;
+  /** Optional; null/omitted matches the FCW's whole-market scope. */
+  country?: string | undefined;
+  /** Optional; when omitted loom resolves the active frozen PWS for the space. */
+  pwsId?: string | undefined;
+}
+
+/**
  * Full content record (GET /api/content/{content_id} -> ContentProductView).
  * `body` is the single assembled article string (wire: body); the wire has no
  * paragraphs array and no separate title field — goal carries the article goal.
@@ -96,6 +113,8 @@ export interface LoomContent {
 export interface LoomClient {
   readonly name: string;
   readonly mode: 'mock' | 'online';
+  /** Issue an FCW final_id via POST /api/fcw/assemble (reuses on duplicate). */
+  issueFinal(input: LoomFinalIssueInput): Promise<string>;
   /** Kick off the 13-segment chain for a pre-issued finalId. */
   submitTopicDraft(input: LoomTopicDraftInput): Promise<LoomTopicDraftRef>;
   /** Fetch the content by content id (wire: path content_id, tenant_id query). */
