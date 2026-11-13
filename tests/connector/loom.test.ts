@@ -119,6 +119,31 @@ describe('MockLoomClient (offline path, reconciled shapes)', () => {
       loom.submitTopicDraft({ taskId: 't', finalId: '', query: 'q', angle: 'a', siteId: 's', evidenceSignalIds: [] }),
     ).rejects.toThrow();
   });
+
+  it('issueFinal returns a deterministic id per space+slot (idempotent duplicate)', async () => {
+    const loom = new MockLoomClient();
+    const material = { productSpaceId: 'ps_1', platform: 'x_platform', slotId: 'slot_1', goal: 'ENGAGEMENT' };
+    const first = await loom.issueFinal(material);
+    const second = await loom.issueFinal(material);
+    expect(first).toBe(second);
+    expect(first).toBe('fcw_ps_1_slot_1');
+  });
+
+  it('issueFinal rejects empty required material', async () => {
+    const loom = new MockLoomClient();
+    await expect(
+      loom.issueFinal({ productSpaceId: '', platform: 'x', slotId: 's', goal: 'g' }),
+    ).rejects.toThrow();
+    await expect(
+      loom.issueFinal({ productSpaceId: 'p', platform: '', slotId: 's', goal: 'g' }),
+    ).rejects.toThrow();
+    await expect(
+      loom.issueFinal({ productSpaceId: 'p', platform: 'x', slotId: '', goal: 'g' }),
+    ).rejects.toThrow();
+    await expect(
+      loom.issueFinal({ productSpaceId: 'p', platform: 'x', slotId: 's', goal: '' }),
+    ).rejects.toThrow();
+  });
 });
 
 describe('HttpLoomClient (reconciled loom FastAPI wire contract)', () => {
@@ -236,6 +261,77 @@ describe('HttpLoomClient (reconciled loom FastAPI wire contract)', () => {
     const { fetchImpl } = scriptedFetch([{ status: 200, body: { ...wireView, status: 'made_up_state' } }]);
     const client = new HttpLoomClient(deps({ fetchImpl }));
     await expect(client.getContent('cp_x')).rejects.toMatchObject({ code: 'VALIDATION_FAILED' });
+  });
+
+  it('issueFinal POSTs /api/fcw/assemble with the exact wire body and returns final_id', async () => {
+    const { fetchImpl, calls } = scriptedFetch([{ status: 201, body: { final_id: 'fcw_new' } }]);
+    const client = new HttpLoomClient(deps({ fetchImpl }));
+    const finalId = await client.issueFinal({
+      productSpaceId: 'ps_1', platform: 'x_platform', slotId: 'slot_1', goal: 'ENGAGEMENT',
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe('http://loom.internal:8000/api/fcw/assemble');
+    expect(calls[0]?.method).toBe('POST');
+    const body = JSON.parse(calls[0]?.body ?? '{}') as Record<string, unknown>;
+    expect(body).toEqual({
+      product_space_id: 'ps_1',
+      platform: 'x_platform',
+      slot_id: 'slot_1',
+      goal: 'ENGAGEMENT',
+      actor: { id: 'growth-agent', roles: ['operations'] },
+    });
+    expect(finalId).toBe('fcw_new');
+  });
+
+  it('issueFinal forwards optional country and pws_id, omitting them when empty', async () => {
+    const { fetchImpl, calls } = scriptedFetch([
+      { status: 201, body: { final_id: 'fcw_cn' } },
+      { status: 201, body: { final_id: 'fcw_plain' } },
+    ]);
+    const client = new HttpLoomClient(deps({ fetchImpl }));
+    await client.issueFinal({
+      productSpaceId: 'ps_1', platform: 'x', slotId: 's', goal: 'g', country: 'CN', pwsId: 'pws_1',
+    });
+    const withOpt = JSON.parse(calls[0]?.body ?? '{}') as Record<string, unknown>;
+    expect(withOpt).toMatchObject({ country: 'CN', pws_id: 'pws_1' });
+
+    await client.issueFinal({ productSpaceId: 'ps_1', platform: 'x', slotId: 's', goal: 'g' });
+    const withoutOpt = JSON.parse(calls[1]?.body ?? '{}') as Record<string, unknown>;
+    expect(withoutOpt).not.toHaveProperty('country');
+    expect(withoutOpt).not.toHaveProperty('pws_id');
+  });
+
+  it('issueFinal reuses the already-issued final_id on 409 DuplicateIssuance', async () => {
+    const { fetchImpl } = scriptedFetch([
+      { status: 409, body: { detail: 'FCW already issued: 537a2f28-c0e5-11f1-8218-9bc72af50592' } },
+    ]);
+    const client = new HttpLoomClient(deps({ fetchImpl }));
+    await expect(
+      client.issueFinal({ productSpaceId: 'ps_1', platform: 'x', slotId: 's', goal: 'g' }),
+    ).resolves.toBe('537a2f28-c0e5-11f1-8218-9bc72af50592');
+  });
+
+  it('issueFinal does NOT treat a guards-failed 409 as a duplicate', async () => {
+    const { fetchImpl } = scriptedFetch([
+      { status: 409, body: { detail: { message: 'FCW guards failed', guards: [{ code: 'g2', passed: false }] } } },
+    ]);
+    const client = new HttpLoomClient(deps({ fetchImpl }));
+    await expect(
+      client.issueFinal({ productSpaceId: 'ps_1', platform: 'x', slotId: 's', goal: 'g' }),
+    ).rejects.toMatchObject({ code: 'INVALID_TRANSITION' });
+  });
+
+  it('issueFinal rejects empty required material and an empty final_id response', async () => {
+    const noFetch = new HttpLoomClient(deps());
+    await expect(
+      noFetch.issueFinal({ productSpaceId: '', platform: 'x', slotId: 's', goal: 'g' }),
+    ).rejects.toMatchObject({ code: 'VALIDATION_FAILED' });
+
+    const { fetchImpl } = scriptedFetch([{ status: 201, body: { final_id: '' } }]);
+    const empty = new HttpLoomClient(deps({ fetchImpl }));
+    await expect(
+      empty.issueFinal({ productSpaceId: 'p', platform: 'x', slotId: 's', goal: 'g' }),
+    ).rejects.toMatchObject({ code: 'VALIDATION_FAILED' });
   });
 });
 
