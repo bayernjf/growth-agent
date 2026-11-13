@@ -1,5 +1,11 @@
 # Handoff
 
+> **2026-11-13 补登：loom 模式（ARTICLE-GEN）已通过 ark-code-latest 跑通 HTTP 端到端。**
+>
+> - **结论**：growth-agent 的 loom 模式（`GA_DRAFT_MODE=loom` → `POST /api/content/generate`）已在 loom 侧真实验证闭环——staff 令牌（operations）认证通过，`/api/content/generate` 返回 **201 + status=review**，真实产出种草文，`SCENE_ARTICLE_GEN="ARTICLE-GEN"` 经 `gateway.invoke` 解析到 **ark-code-latest**。
+> - **前提**：loom 已接 model-hub（创建 loom 项目 + 分配 ark-code-latest + token，见 loom/handoff.md），`ARTICLE-GEN` 与 `CONTENT-BASE` 两场景 text 模态均命中 ark-code-latest。
+> - **剩余缺口（未解决）**：growth-agent 自身**不发 final_id**——`src/connector/loom/http.ts::submitTopicDraft` 靠上游传 `input.finalId`，为空即报错。final_id 需 operator 线下经 loom `POST /api/fcw/assemble` 发证（要 product_space/platform/slot/七 Guard 前置）。本次验证为绕过该缺口，对 loom 测试环境 E2E 遗留 final 的冻结快照直接写库恢复后复用；**生产上这条链路的全自动发证仍未打通**。
+
 > **2026-11-06 补登：dev → main 已于 2026-11-05 经 PR #10 合并（合并前 CI 全绿）；实测 origin/main 与 origin/dev 内容完全一致（git diff 为空）。**
 
 State of growth-agent as of 2026-10-28.
