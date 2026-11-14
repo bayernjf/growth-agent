@@ -34,6 +34,9 @@ services:
       GA_REPORT_DIR: /data/reports
       GA_ZEUS_URL: http://zeus:8787
       GA_ZEUS_CALLBACK_URL: http://orchestrator:8790/webhooks/zeus
+      GA_ZEUS_MODE: online
+      GA_ZEUS_TOKEN: ${ZEUS_INTERNAL_TOKEN}
+      GA_ZEUS_WEBHOOK_SECRET: ${GA_ZEUS_WEBHOOK_SECRET}
     volumes:
       - agent_data:/data
       - gsc_tokens:/data/gsc-tokens
@@ -90,6 +93,8 @@ services:
       # .env.example). On the /data volume so drafts survive a rebuild.
       GA_DRAFT_INBOX_DIR: /data/drafts
       GA_ZEUS_URL: http://zeus:8787
+      GA_ZEUS_MODE: online
+      GA_ZEUS_TOKEN: ${ZEUS_INTERNAL_TOKEN}
       # Outbound alerts (2026-11-08 handoff P0): a coverage gap or a failed
       # batch round already exits non-zero; these push it out so nobody has to
       # watch `docker compose logs`. Unset keeps the loop local-only.
@@ -140,6 +145,9 @@ services:
       ZEUS_HOST: 0.0.0.0
       ZEUS_PORT: 8787
       ZEUS_INTERNAL_TOKEN: ${ZEUS_INTERNAL_TOKEN}
+      # Decision webhook push to growth-agent orchestrator (seeded at boot).
+      ZEUS_DECISION_WEBHOOK_URL: http://orchestrator:8790/webhooks/zeus
+      ZEUS_DECISION_WEBHOOK_SECRET: ${GA_ZEUS_WEBHOOK_SECRET}
       # Roster signing key: generate once (see zeus docs/deployment.md) and
       # persist in the zeusdata volume; the kernel refuses to boot without it.
       ZEUS_RSK_KEY_FILE: /data/rsk.key

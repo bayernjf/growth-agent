@@ -24,6 +24,13 @@ export interface InboxDraftFile {
   changeSummary: string;
   /** loom mode only: the operator-issued FCW final_id. */
   finalId?: string | undefined;
+  /** loom auto-issue: FCW assemble material (POST /api/fcw/assemble). */
+  productSpaceId?: string | undefined;
+  platform?: string | undefined;
+  slotId?: string | undefined;
+  goal?: string | undefined;
+  country?: string | undefined;
+  pwsId?: string | undefined;
 }
 
 export type InboxFileResult =
@@ -42,6 +49,12 @@ export interface ReadInboxOptions {
 
 function isString(value: unknown): value is string {
   return typeof value === 'string';
+}
+
+/** Optional string envelope field: undefined when absent, empty, or wrong type. */
+function readOptionalString(obj: Record<string, unknown>, key: string): string | undefined {
+  const value = obj[key];
+  return isString(value) && value.trim() !== '' ? value.trim() : undefined;
 }
 
 /** Read and structurally validate one task's inbox file. */
@@ -110,14 +123,20 @@ export function readInboxFile(
     return { status: 'invalid', reason: `${path}: ${problems.join('; ')}` };
   }
 
-  const finalId = obj.finalId;
   const file: InboxDraftFile = {
     slug: (slug as string).trim(),
     title: (title as string).trim(),
     paragraphs: body,
     changeSummary: (changeSummary as string).trim(),
   };
-  if (isString(finalId) && finalId.trim() !== '') file.finalId = finalId.trim();
+  const finalId = readOptionalString(obj, 'finalId');
+  if (finalId !== undefined) file.finalId = finalId;
+  file.productSpaceId = readOptionalString(obj, 'productSpaceId');
+  file.platform = readOptionalString(obj, 'platform');
+  file.slotId = readOptionalString(obj, 'slotId');
+  file.goal = readOptionalString(obj, 'goal');
+  file.country = readOptionalString(obj, 'country');
+  file.pwsId = readOptionalString(obj, 'pwsId');
   return { status: 'ok', file };
 }
 

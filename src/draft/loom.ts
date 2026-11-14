@@ -1,9 +1,11 @@
 // Loom-backed draft source (§5.C online half). loom writes the article; the
-// operator still owns the envelope, because loom issues `final_id` out-of-band
-// via POST /api/fcw/assemble (needs product_space_id + platform + slot_id, which
-// growth-agent deliberately has no model for). So this provider reads the same
-// inbox file as InboxDraftProvider — for slug / title / changeSummary / finalId
-// — and takes the body from loom.
+// operator still owns the envelope, supplying either a pre-issued `finalId` or
+// the assemble material (productSpaceId + platform + slotId + goal) that lets
+// this provider issue the final_id itself via POST /api/fcw/assemble.
+// growth-agent still has no model for loom's publishing-asset topology — those
+// ids arrive verbatim from the envelope, never derived here. So this provider
+// reads the same inbox file as InboxDraftProvider — for slug / title /
+// changeSummary / finalId (or issue material) — and takes the body from loom.
 //
 // Fail-closed discipline: loom errors propagate (a RejectingLoomClient 422 must
 // surface, never degrade to the inbox body). A chain that is still generating is
@@ -14,6 +16,7 @@ import type { CostRecorder } from '../cost/recorder.js';
 import type { LoomClient } from '../connector/loom/types.js';
 import { MIN_PARAGRAPHS } from '../qa/value-gate.js';
 import { readInboxFile } from './inbox.js';
+import type { InboxDraftFile } from './inbox.js';
 import type { DraftOutcome, DraftProvider, DraftRequest } from './types.js';
 
 export interface LoomDraftDeps {
@@ -52,13 +55,14 @@ export class LoomDraftProvider implements DraftProvider {
     if (envelope.status !== 'ok') {
       return { status: 'unavailable', reason: envelope.reason };
     }
-    const finalId = envelope.file.finalId;
-    if (finalId === undefined) {
+    const finalId = await this.resolveFinalId(envelope.file);
+    if (finalId === null) {
       return {
         status: 'unavailable',
         reason:
-          `draft file for ${input.taskId} carries no finalId: loom issues final_id ` +
-          'out-of-band via POST /api/fcw/assemble (product_space_id + platform + slot_id)',
+          `draft file for ${input.taskId} carries no finalId and no loom issue material ` +
+          '(productSpaceId + platform + slotId + goal): issue final_id via POST /api/fcw/assemble ' +
+          'or add the issue material to the envelope',
       };
     }
 
@@ -105,6 +109,30 @@ export class LoomDraftProvider implements DraftProvider {
       changeSummary: envelope.file.changeSummary,
       loomContentId: contentId,
     };
+  }
+
+  /**
+   * Resolve the final_id to submit under: reuse the operator-issued finalId when
+   * present, otherwise auto-issue one from the envelope's assemble material. The
+   * four required assemble fields live in the envelope, so the operator no longer
+   * has to issue and paste the final_id out-of-band.
+   */
+  private async resolveFinalId(file: InboxDraftFile): Promise<string | null> {
+    if (file.finalId !== undefined) return file.finalId;
+    const { productSpaceId, platform, slotId, goal } = file;
+    if (productSpaceId === undefined || platform === undefined || slotId === undefined || goal === undefined) {
+      return null;
+    }
+    return this.measure('POST', 'loom:fcw:assemble', () =>
+      this.deps.loom.issueFinal({
+        productSpaceId,
+        platform,
+        slotId,
+        goal,
+        country: file.country,
+        pwsId: file.pwsId,
+      }),
+    );
   }
 
   /**

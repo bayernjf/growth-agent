@@ -10,6 +10,7 @@ import type {
   LoomClient,
   LoomContent,
   LoomContentStatus,
+  LoomFinalIssueInput,
   LoomTopicDraftInput,
   LoomTopicDraftRef,
 } from './types.js';
@@ -28,6 +29,17 @@ export class MockLoomClient implements LoomClient {
 
   constructor(state: MockLoomState = {}) {
     this.statusByFinalId = state.statusByFinalId ?? new Map();
+  }
+
+  async issueFinal(input: LoomFinalIssueInput): Promise<string> {
+    if (input.productSpaceId === '' || input.platform === '' || input.slotId === '' || input.goal === '') {
+      throw GrowthAgentErrors.validation(
+        'issueFinal: productSpaceId, platform, slotId and goal are required',
+      );
+    }
+    // Deterministic per space+slot: mirrors loom's DuplicateIssuance idempotency
+    // (same material -> same final_id), so repeated assembly reuses the id.
+    return `fcw_${input.productSpaceId}_${input.slotId}`;
   }
 
   async submitTopicDraft(input: LoomTopicDraftInput): Promise<LoomTopicDraftRef> {

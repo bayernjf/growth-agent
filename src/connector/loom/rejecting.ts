@@ -8,6 +8,7 @@ import type {
   LoomClient,
   LoomContent,
   LoomContentStatus,
+  LoomFinalIssueInput,
   LoomTopicDraftInput,
   LoomTopicDraftRef,
 } from './types.js';
@@ -20,6 +21,10 @@ export class RejectingLoomClient implements LoomClient {
 
   private fail(): Promise<never> {
     return Promise.reject(GrowthAgentErrors.credentialMissing(this.message));
+  }
+
+  issueFinal(_input: LoomFinalIssueInput): Promise<string> {
+    return this.fail();
   }
 
   submitTopicDraft(_input: LoomTopicDraftInput): Promise<LoomTopicDraftRef> {

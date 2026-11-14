@@ -20,6 +20,7 @@ import type {
   LoomClient,
   LoomContent,
   LoomContentStatus,
+  LoomFinalIssueInput,
   LoomTopicDraftInput,
   LoomTopicDraftRef,
 } from './types.js';
@@ -44,6 +45,11 @@ interface WireContentProduct {
   status?: unknown;
   published_url?: unknown;
   quality_score?: unknown;
+}
+
+/** Loose view of the POST /api/fcw/assemble response (fcw_view). */
+interface WireFinalWhitelist {
+  final_id?: unknown;
 }
 
 export interface HttpLoomClientDeps {
@@ -95,6 +101,40 @@ export class HttpLoomClient implements LoomClient {
     this.timeoutMs = deps.timeoutMs ?? 10_000;
     this.maxAttempts = deps.maxAttempts ?? 3;
     this.baseBackoffMs = deps.baseBackoffMs ?? 200;
+  }
+
+  async issueFinal(input: LoomFinalIssueInput): Promise<string> {
+    if (input.productSpaceId === '' || input.platform === '' || input.slotId === '' || input.goal === '') {
+      throw GrowthAgentErrors.validation(
+        'issueFinal: productSpaceId, platform, slotId and goal are required',
+      );
+    }
+    const body: Record<string, unknown> = {
+      product_space_id: input.productSpaceId,
+      platform: input.platform,
+      slot_id: input.slotId,
+      goal: input.goal,
+      actor: { id: this.actorId, roles: ['operations'] },
+    };
+    if (input.country !== undefined && input.country !== '') body.country = input.country;
+    if (input.pwsId !== undefined && input.pwsId !== '') body.pws_id = input.pwsId;
+
+    try {
+      const view = await this.withRetry(() =>
+        this.request<WireFinalWhitelist>('POST', '/api/fcw/assemble', body),
+      );
+      const finalId = String(view.final_id ?? '');
+      if (finalId === '') {
+        throw GrowthAgentErrors.validation('loom assemble returned no final_id');
+      }
+      return finalId;
+    } catch (err) {
+      // 409 DuplicateIssuance (same pws+pwc+platform+slot+country) is idempotent:
+      // reuse the already-issued final_id instead of failing the draft.
+      const reused = reuseIssuedFinalId(err);
+      if (reused !== null) return reused;
+      throw err;
+    }
   }
 
   async submitTopicDraft(input: LoomTopicDraftInput): Promise<LoomTopicDraftRef> {
@@ -218,4 +258,17 @@ function toStatus(raw: unknown): LoomContentStatus {
     return raw as LoomContentStatus;
   }
   throw GrowthAgentErrors.validation(`loom returned unknown content status: ${String(raw)}`);
+}
+
+/**
+ * Recover the already-issued final_id from a 409 DuplicateIssuance. loom's router
+ * maps it to `detail: "FCW already issued: <final_id>"`, which the request() 409
+ * branch turns into an INVALID_TRANSITION error message `loom state conflict: ...`.
+ * Returns null for any other error (guards-failed 409, 4xx/5xx, network).
+ */
+function reuseIssuedFinalId(err: unknown): string | null {
+  if (!(err instanceof GrowthAgentError)) return null;
+  if (err.code !== 'INVALID_TRANSITION') return null;
+  const match = /FCW already issued:\s*(\S+)/.exec(err.message);
+  return match?.[1] ?? null;
 }

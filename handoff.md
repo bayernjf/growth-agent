@@ -1,5 +1,19 @@
 # Handoff
 
+> **2026-11-13 补登：growth-agent 已加 loom 自动发证，闭合 final_id 契约缺口。**
+>
+> - **变更**：`LoomClient` 新增 `issueFinal()`（`POST /api/fcw/assemble`），409 `DuplicateIssuance`（同 pws+pwc+platform+slot+country 已发证）幂等复用已有 final_id 而非报错。draft 层的 inbox envelope 新增可选发证材料 `productSpaceId/platform/slotId/goal/country/pwsId`：无 `finalId` 时 `LoomDraftProvider` 自动调 `issueFinal` 发证，再走 `/api/content/generate`。
+> - **边界不变**：growth-agent 仍不建模 loom 的发布资产拓扑，四个必填字段原样来自 envelope，不在本地推导；有 `finalId` 时行为与旧版完全一致。
+> - **验证**：`npm run typecheck && npm run lint && npm test`（467 用例全绿）+ `npm run build` 通过；新增 9 个用例覆盖 wire body、可选 country/pws、409 复用、guards-failed 不复用、draft 自动发证与材料不全。
+> - **commit**：`5bb9c7e`（connector 端口）、`f6aee1c`（draft 编排）、`ba503a8`（测试）。
+> - **仍未做（等 SSO）**：SSO 重登后登记 doubao-seed-1-6 接入点，把成稿模型从 ark-code-latest 切过去提升营销文案质量。
+
+> **2026-11-13 补登：loom 模式（ARTICLE-GEN）已通过 ark-code-latest 跑通 HTTP 端到端。**
+>
+> - **结论**：growth-agent 的 loom 模式（`GA_DRAFT_MODE=loom` → `POST /api/content/generate`）已在 loom 侧真实验证闭环——staff 令牌（operations）认证通过，`/api/content/generate` 返回 **201 + status=review**，真实产出种草文，`SCENE_ARTICLE_GEN="ARTICLE-GEN"` 经 `gateway.invoke` 解析到 **ark-code-latest**。
+> - **前提**：loom 已接 model-hub（创建 loom 项目 + 分配 ark-code-latest + token，见 loom/handoff.md），`ARTICLE-GEN` 与 `CONTENT-BASE` 两场景 text 模态均命中 ark-code-latest。
+> - **剩余缺口（未解决）**：growth-agent 自身**不发 final_id**——`src/connector/loom/http.ts::submitTopicDraft` 靠上游传 `input.finalId`，为空即报错。final_id 需 operator 线下经 loom `POST /api/fcw/assemble` 发证（要 product_space/platform/slot/七 Guard 前置）。本次验证为绕过该缺口，对 loom 测试环境 E2E 遗留 final 的冻结快照直接写库恢复后复用；**生产上这条链路的全自动发证仍未打通**。
+
 > **2026-11-06 补登：dev → main 已于 2026-11-05 经 PR #10 合并（合并前 CI 全绿）；实测 origin/main 与 origin/dev 内容完全一致（git diff 为空）。**
 
 State of growth-agent as of 2026-10-28.

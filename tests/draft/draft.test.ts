@@ -13,6 +13,7 @@ import type {
   LoomClient,
   LoomContent,
   LoomContentStatus,
+  LoomFinalIssueInput,
   LoomTopicDraftInput,
   LoomTopicDraftRef,
 } from '../../src/connector/loom/types.js';
@@ -129,6 +130,10 @@ class FakeLoom implements LoomClient {
     private readonly body: string | null,
   ) {}
 
+  async issueFinal(_input: LoomFinalIssueInput): Promise<string> {
+    return 'fcw_auto_issued';
+  }
+
   async submitTopicDraft(input: LoomTopicDraftInput): Promise<LoomTopicDraftRef> {
     this.submitCalls += 1;
     this.submitted.push(input);
@@ -205,6 +210,40 @@ describe('LoomDraftProvider', () => {
     if (outcome.status !== 'unavailable') return;
     expect(outcome.reason).toContain('carries no finalId');
     expect(outcome.reason).toContain('/api/fcw/assemble');
+  });
+
+  it('auto-issues a final_id from the envelope assemble material when no finalId is present', async () => {
+    writeDraftFile(request.taskId, {
+      slug: validFile.slug,
+      title: validFile.title,
+      changeSummary: 'New guide',
+      productSpaceId: 'ps_1',
+      platform: 'x_platform',
+      slotId: 'slot_1',
+      goal: 'ENGAGEMENT',
+    });
+    const loom = new FakeLoom('review', body);
+
+    const outcome = await loomProvider(loom).obtain(request);
+
+    expect(outcome.status).toBe('ready');
+    expect(loom.submitted[0]).toMatchObject({ finalId: 'fcw_auto_issued' });
+  });
+
+  it('refuses to run when the assemble material is incomplete', async () => {
+    writeDraftFile(request.taskId, {
+      slug: validFile.slug,
+      title: validFile.title,
+      changeSummary: 'New guide',
+      productSpaceId: 'ps_1',
+      // platform / slotId / goal omitted
+    });
+    const loom = new FakeLoom('review', body);
+
+    const outcome = await loomProvider(loom).obtain(request);
+
+    expect(outcome.status).toBe('unavailable');
+    expect(loom.submitCalls).toBe(0);
   });
 
   it('reports a still-generating chain as unavailable but hands back the content id', async () => {
