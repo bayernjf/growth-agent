@@ -91,6 +91,7 @@ export class PostgresDriver implements StorageDriver {
   readonly dialect = 'postgres' as const;
   // Minimal structural surface of pg.Client used here.
   private readonly client: {
+    connect: () => Promise<void>;
     query: (sql: string, params?: unknown[]) => Promise<{ rows: unknown[]; rowCount: number }>;
     end: () => Promise<void>;
   };
@@ -115,6 +116,10 @@ export class PostgresDriver implements StorageDriver {
       );
     }
     const client = new pg.Client({ connectionString });
+    // pg.Client does not auto-connect on query(): without an explicit
+    // connect() the probe below would queue forever (0 active handles,
+    // silent hang) instead of failing with an auth/network error.
+    await client.connect();
     await client.query('SELECT 1');
     return new PostgresDriver(client);
   }
