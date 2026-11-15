@@ -3,8 +3,27 @@
 // following placeholder so parameters bound to the wrong position. The
 // converter must touch ONLY real placeholders and leave `$1`/`$foo` text as-is.
 
-import { describe, expect, it } from 'vitest';
-import { toDollarParams } from '../../src/storage/postgres/postgres-driver.js';
+import { describe, expect, it, vi } from 'vitest';
+import { PostgresDriver, toDollarParams } from '../../src/storage/postgres/postgres-driver.js';
+
+const calls = vi.hoisted(() => [] as string[]);
+
+vi.mock('pg', () => {
+  class FakeClient {
+    constructor(_config: { connectionString: string }) {}
+    async connect() {
+      calls.push('connect');
+    }
+    async query() {
+      calls.push('query');
+      return { rows: [], rowCount: 0 };
+    }
+    async end() {
+      calls.push('end');
+    }
+  }
+  return { Client: FakeClient };
+});
 
 describe('toDollarParams (F-14)', () => {
   it('converts bare ? placeholders in order', () => {
@@ -34,5 +53,15 @@ describe('toDollarParams (F-14)', () => {
       'SELECT "odd?name" -- comment ?\nFROM t /* block ? /* nested ? */ */ WHERE a = $1',
     );
     expect(count).toBe(1);
+  });
+});
+
+describe('PostgresDriver.connect (connect-before-query regression)', () => {
+  it('connects the client before probing with SELECT 1', async () => {
+    calls.length = 0;
+    const driver = await PostgresDriver.connect('postgres://u:p@127.0.0.1:5432/db');
+    expect(calls).toEqual(['connect', 'query']);
+    await driver.close();
+    expect(calls).toEqual(['connect', 'query', 'end']);
   });
 });
