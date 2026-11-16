@@ -157,6 +157,11 @@ services:
       ZEUS_RSK_KEY_FILE: /data/rsk.key
       ZEUS_RSK_KEY_ID: ${ZEUS_RSK_KEY_ID:-local-rsk}
       ZEUS_STATE_FILE: /data/kernel-state.json
+      # Decision records (policy + webhooks + org state) in SQLite. Without it
+      # zeus runs the in-memory demo mode and every decision vanishes on
+      # restart, leaving growth tasks pointing at decision ids that no longer
+      # exist. The file lives in the same zeusdata volume.
+      ZEUS_DB_FILE: /data/zeus.db
     volumes:
       - zeusdata:/data
     expose: ["8787"]
