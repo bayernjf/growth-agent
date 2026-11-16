@@ -146,6 +146,10 @@ services:
       ZEUS_PORT: 8787
       ZEUS_INTERNAL_TOKEN: ${ZEUS_INTERNAL_TOKEN}
       # Decision webhook push to growth-agent orchestrator (seeded at boot).
+      # The outbound DNS guard refuses private targets by default, so the
+      # compose-internal host must be allowlisted or every delivery is
+      # dropped silently (fail-soft dispatcher, no retry log).
+      ZEUS_OUTBOUND_ALLOW_HOSTS: orchestrator
       ZEUS_DECISION_WEBHOOK_URL: http://orchestrator:8790/webhooks/zeus
       ZEUS_DECISION_WEBHOOK_SECRET: ${GA_ZEUS_WEBHOOK_SECRET}
       # Roster signing key: generate once (see zeus docs/deployment.md) and
