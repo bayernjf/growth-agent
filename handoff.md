@@ -1,5 +1,15 @@
 # Handoff
 
+## 待办登记（标准）
+
+> 本段是本产品唯一活跃待办入口；详细背景见下方原有章节。完成一项改 `[x]`，并在“最近变更 / Recently shipped”留证据。
+> 最近同步：2026-11-19
+
+- [ ] **真实 SERP / GSC 凭据** — 状态：blocked by E2；下一步：DataForSEO Basic Auth + GSC OAuth；当前 offline fixture 不挡其他工作。
+- [ ] **真实 GitHub PR 闭环** — 状态：open；目前只验证了凭据与 webhook，未跑过业务 run。
+- [ ] **成稿模型切 `doubao-seed-1-6`** — 状态：blocked by E1；下一步：SSO 重登后登记并切换，提升营销文案质量。
+- [ ] **生产全自动发证 `final_id`** — 状态：open；growth-agent 自身不发 `final_id`，靠上游 operator 线下发证；生产全自动发证仍未打通。
+
 > **2026-11-13 补登：growth-agent 已加 loom 自动发证，闭合 final_id 契约缺口。**
 >
 > - **变更**：`LoomClient` 新增 `issueFinal()`（`POST /api/fcw/assemble`），409 `DuplicateIssuance`（同 pws+pwc+platform+slot+country 已发证）幂等复用已有 final_id 而非报错。draft 层的 inbox envelope 新增可选发证材料 `productSpaceId/platform/slotId/goal/country/pwsId`：无 `finalId` 时 `LoomDraftProvider` 自动调 `issueFinal` 发证，再走 `/api/content/generate`。
