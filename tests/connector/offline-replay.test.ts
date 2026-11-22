@@ -13,6 +13,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { loadConfig } from '../../src/config.js';
 import { createGscReadonlyProvider } from '../../src/connector/gsc/registry.js';
 import { createSerpKeywordProvider } from '../../src/connector/serp/registry.js';
+import { OfflineGscProvider } from '../../src/connector/gsc/offline.js';
 import { GscSnapshotRepository } from '../../src/connector/gsc/snapshot-repository.js';
 import { OfflineZeusClient } from '../../src/connector/zeus/offline.js';
 import { ApiCallRepository } from '../../src/cost/api-call-repository.js';
@@ -81,6 +82,47 @@ describe('zero-credential default mode replays by input dimensions', () => {
     await expect(
       gsc.queryAnalytics({ siteUrl: 'https://other.example/', startDate: '2026-09-01', endDate: '2026-10-31', dimensions: ['page'] }),
     ).resolves.toEqual([]);
+  });
+
+  it('rolling replay keeps fixture intervals usable on a later calendar day', async () => {
+    const gsc = new OfflineGscProvider(undefined, undefined, {
+      rolling: true,
+      anchorDate: '2026-11-21',
+    });
+    const recent = await gsc.queryAnalytics({
+      siteUrl: site.id,
+      startDate: '2026-10-25',
+      endDate: '2026-11-21',
+      dimensions: ['page'],
+    });
+    const prior = await gsc.queryAnalytics({
+      siteUrl: site.id,
+      startDate: '2026-09-27',
+      endDate: '2026-10-24',
+      dimensions: ['page'],
+    });
+    expect(recent.map(r => r.keys[0])).toContain('https://bayjf.com/guides/legacy-guide');
+    expect(prior.map(r => r.keys[0])).toContain('https://bayjf.com/guides/legacy-guide');
+    expect(recent.find(r => r.keys[0] === 'https://bayjf.com/guides/legacy-guide')).toMatchObject({
+      position: 9.5,
+      impressions: 600,
+    });
+    expect(prior.find(r => r.keys[0] === 'https://bayjf.com/guides/legacy-guide')).toMatchObject({
+      position: 5.0,
+      impressions: 900,
+    });
+  });
+
+  it('registry opts into rolling replay only when explicitly enabled', () => {
+    const previous = process.env.GA_GSC_OFFLINE_ROLLING;
+    process.env.GA_GSC_OFFLINE_ROLLING = '1';
+    try {
+      const provider = createGscReadonlyProvider(loadConfig());
+      expect((provider as OfflineGscProvider).rolling).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.GA_GSC_OFFLINE_ROLLING;
+      else process.env.GA_GSC_OFFLINE_ROLLING = previous;
+    }
   });
 
   it('different seeds produce different write candidates from the replay', async () => {
