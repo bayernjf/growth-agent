@@ -38,6 +38,8 @@ npm ci
 npm run check:all       # check:migrations && typecheck && lint && test && build
 npm run migrate:up      # 应用 sqlite 迁移（默认 ./data/growth-agent.db）
 npm run start           # 启动，默认 http://127.0.0.1:8790
+node --env-file=.env scripts/smoke/github-pr-e2e.mjs
+                        # 真实 GitHub PR smoke：默认 bayernjf/git-e2e-test，验完关 PR/删分支
 curl http://127.0.0.1:8790/healthz
 ```
 
@@ -85,9 +87,10 @@ curl http://127.0.0.1:8790/healthz
     `npm run smoke:offline` 通过；另有一次真进程端到端（构建产物 + 文件型 sqlite +
     真签名 zeus webhook）跑通 daily → 审批 → production → verify → report → packet。
 - 明确未做 / 待验证：
-  - **零凭据默认模式产不出候选**：`GA_*_MODE=off` 的 fixture 回放忽略请求维度（GSC
-    无论要 page 还是 query 都返回同一批 query 维行），且对任何 query 返回同一份 SERP
-    （自有域名恒在第 1 位），因此 fresh install 的 `daily` 永远是 0 write / 0 fix。
+  - **零凭据默认模式的回放边界**：fixture 已按请求 site/date/dimensions 与 query/domain
+    过滤；但记录日期固定在 2026-09/10，当前日历跑 `daily` 需要 `GA_GSC_OFFLINE_ROLLING=1`
+    （本机 `.env` 已开）把最新记录锚到昨日 UTC，或显式传 `--day 2026-10-26`。rolling 是
+    合成回放，不是实时 GSC；真实 GSC/SERP 仍需 OAuth/DataForSEO 凭据。
     plumbing 可跑，零凭据 dogfood 还不成立。
   - 真实凭据 e2e：GSC（T-B4 代码已落地，待真实属性核对 wire 形状）、SERP（T-C2 未用
     真 key 验证）、GitHub（T-D4）、loom（T-E5）。
