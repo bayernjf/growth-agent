@@ -10,6 +10,12 @@
 // (tolerating the sc-domain:/https:// spellings), the inclusive
 // [startDate, endDate] window and the requested dimensions. A miss yields
 // [] — never another site's rows and never another window's data.
+//
+// Opt-in `rolling` mode (GA_GSC_OFFLINE_ROLLING=1) shifts recorded dates so
+// the newest row lands on a stable anchor (yesterday UTC by default, matching
+// the daily window's end). It exists so a zero-credential dogfood run in
+// November can still replay the October fixture; the data remains synthetic
+// and is never presented as live GSC.
 
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -73,14 +79,52 @@ function loadFixture(path: string): GscFixture {
   return parsed;
 }
 
+export interface OfflineGscOptions {
+  /**
+   * Shift recorded rows so the newest row for the asked site/dimensions lands
+   * on this UTC date. Explicit synthetic replay for long-running
+   * zero-credential dogfood; default false keeps strict recorded-date replay.
+   */
+  rolling?: boolean;
+  /**
+   * Stable anchor for rolling replay (YYYY-MM-DD). Defaults to yesterday UTC,
+   * because the daily GSC windows end on day-1 (the current day is partial).
+   */
+  anchorDate?: string;
+}
+
+const DAY_MS = 86_400_000;
+
+/** UTC date arithmetic; ISO date strings only, no local timezone drift. */
+function addDays(date: string, days: number): string {
+  return new Date(new Date(`${date}T00:00:00.000Z`).getTime() + days * DAY_MS)
+    .toISOString()
+    .slice(0, 10);
+}
+
+function daysBetween(from: string, to: string): number {
+  const a = new Date(`${from}T00:00:00.000Z`).getTime();
+  const b = new Date(`${to}T00:00:00.000Z`).getTime();
+  return Math.round((b - a) / DAY_MS);
+}
+
 export class OfflineGscProvider implements GscReadonlyProvider {
   readonly name = 'gsc-offline';
   readonly mode = 'offline' as const;
+  readonly rolling: boolean;
   private readonly fixture: GscFixture;
+  private readonly anchorDate: string;
 
   /** Tests pass inline fixtures; production reads tests/fixtures/gsc-fixture.json. */
-  constructor(fixture?: GscFixture, fixturePath: string = DEFAULT_FIXTURE_PATH) {
+  constructor(
+    fixture?: GscFixture,
+    fixturePath: string = DEFAULT_FIXTURE_PATH,
+    options: OfflineGscOptions = {},
+  ) {
     this.fixture = fixture ?? loadFixture(fixturePath);
+    this.rolling = options.rolling ?? false;
+    this.anchorDate = options.anchorDate
+      ?? new Date(Date.now() - DAY_MS).toISOString().slice(0, 10);
   }
 
   async listSites(): Promise<GscSite[]> {
@@ -102,12 +146,30 @@ export class OfflineGscProvider implements GscReadonlyProvider {
     // set so callers can observe pagination pressure.
     const site = normalizeSiteUrl(input.siteUrl);
     const dimensions = input.dimensions.join(',');
-    const hits = this.fixture.analytics.filter(
-      r => normalizeSiteUrl(r.siteUrl) === site
-        && r.date >= input.startDate
-        && r.date <= input.endDate
-        && r.dimensions.join(',') === dimensions,
+    const siteRows = this.fixture.analytics.filter(
+      r => normalizeSiteUrl(r.siteUrl) === site && r.dimensions.join(',') === dimensions,
     );
+
+    // Strict replay: recorded dates only. Rolling replay: anchor the newest
+    // recorded row to endDate, then apply the same day shift to every row so
+    // the fixture's recorded intervals (and deltas) survive as the calendar
+    // moves. This is explicitly synthetic, never a claim of live GSC data.
+    let hits: GscFixtureRow[];
+    if (this.rolling && siteRows.length > 0) {
+      const anchor = siteRows.reduce(
+        (max, row) => (row.date > max ? row.date : max),
+        siteRows[0]?.date ?? input.endDate,
+      );
+      const shift = daysBetween(anchor, this.anchorDate);
+      hits = siteRows.filter((row) => {
+        const shifted = addDays(row.date, shift);
+        return shifted >= input.startDate && shifted <= input.endDate;
+      });
+    } else {
+      hits = siteRows.filter(
+        r => r.date >= input.startDate && r.date <= input.endDate,
+      );
+    }
     return hits
       .slice(0, input.rowLimit ?? hits.length)
       .map(r => ({

@@ -30,5 +30,7 @@ export function createGscReadonlyProvider(config: AppConfig): GscReadonlyProvide
       tokenStore,
     });
   }
-  return new OfflineGscProvider();
+  return new OfflineGscProvider(undefined, undefined, {
+    rolling: config.gscOfflineRolling === true,
+  });
 }
