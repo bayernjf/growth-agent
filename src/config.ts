@@ -19,6 +19,12 @@ export interface AppConfig {
   zeusWebhookMaxSkewSeconds: number;
   /** GSC read-only connector (T-B1/B2). off = deterministic offline fixture. */
   gscMode: 'off' | 'online';
+  /**
+   * Offline-only: shift recorded fixture dates so the newest row lands on the
+   * requested endDate. This keeps zero-credential dogfood runs producing
+   * candidates as the calendar moves; it is synthetic replay, never live GSC.
+   */
+  gscOfflineRolling?: boolean | undefined;
   gscClientId?: string | undefined;
   gscClientSecret?: string | undefined;
   /** Directory holding the sealed refresh-token file (§8 gsc_tokens volume). */
@@ -118,6 +124,7 @@ export function loadConfig(): AppConfig {
       ? Number(process.env.GA_ZEUS_WEBHOOK_MAX_SKEW_SECONDS)
       : 300,
     gscMode,
+    gscOfflineRolling: process.env.GA_GSC_OFFLINE_ROLLING === '1',
     gscClientId: process.env.GA_GSC_CLIENT_ID || undefined,
     gscClientSecret: process.env.GA_GSC_CLIENT_SECRET || undefined,
     gscTokenDir: process.env.GA_GSC_TOKEN_DIR ?? './data/gsc-tokens',

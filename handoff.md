@@ -5,10 +5,18 @@
 > 本段是本产品唯一活跃待办入口；详细背景见下方原有章节。完成一项改 `[x]`，并在“最近变更 / Recently shipped”留证据。
 > 最近同步：2026-11-19
 
-- [ ] **真实 SERP / GSC 凭据** — 状态：blocked by E2；下一步：DataForSEO Basic Auth + GSC OAuth；当前 offline fixture 不挡其他工作。
-- [ ] **真实 GitHub PR 闭环** — 状态：open；目前只验证了凭据与 webhook，未跑过业务 run。
+- [ ] **真实 SERP / GSC 凭据** — 状态：blocked（本机未发现 DataForSEO 或 GSC OAuth 凭据）；下一步：DataForSEO Basic Auth + GSC OAuth；本地零凭据链路已可用，真实 online 数据仍待接入。
+- [x] **真实 GitHub PR 闭环** — 状态：已完成（2026-11-22）；证据：`scripts/smoke/github-pr-e2e.mjs` 在 `bayernjf/git-e2e-test` 真实建 PR #19，幂等复用与状态查询通过，收尾自动关 PR/删分支；报告 `data/e2e/github-pr-2026-11-22T14-32-39-930Z.json`。
+- [x] **零凭据本地日跑产候选** — 状态：已完成（2026-11-22）；GSC fixture 按输入维度回放，`GA_GSC_OFFLINE_ROLLING=1` 时按昨日 UTC 锚点滚动；本机 `daily` 当日产出 1 write + 1 fix。
 - [ ] **成稿模型切 `doubao-seed-1-6`** — 状态：blocked by E1；下一步：SSO 重登后登记并切换，提升营销文案质量。
 - [ ] **生产全自动发证 `final_id`** — 状态：open；growth-agent 自身不发 `final_id`，靠上游 operator 线下发证；生产全自动发证仍未打通。
+
+> **2026-11-22 补登：真实 GitHub PR 闭环 + 零凭据滚动回放（Tier 0 本地 MVP 收口）。**
+>
+> - **真实 GitHub PR**：新增 `scripts/smoke/github-pr-e2e.mjs`，用真实 `GitHubPublisher` 跑 daily → zeus 审批 → production sweep → 建 PR；目标仓固定为 `bayernjf/git-e2e-test`（非该仓需 `GA_E2E_ALLOW_ANY_REPO=1`），默认验证后关 PR 并删任务分支。实跑 PR #19：创建成功、head branch 与 task 匹配、PR body 带 task id、重复 `openChange` 返回同一 PR、`getChangeStatus=open`，全部断言通过。报告落在 `data/e2e/`（gitignored）。
+> - **零凭据本地日跑**：`OfflineGscProvider` 本来已按 site/date/dimensions 过滤，但 fixture 固定日期在 2026-09/10，当前日历跑 daily 会 0 候选。新增显式 `GA_GSC_OFFLINE_ROLLING=1`：把该站最新记录锚到昨日 UTC，其他行等距平移，recent/prior 窗口保持原有落差；默认关闭，严格日期回放与既有测试不变。本机 2026-11-22 `daily` 实跑输出 `gt_20261122_write_1` + `gt_20261122_fix_2`，deferred 2 write / 0 fix。
+> - **边界**：rolling 是合成回放，不是实时 GSC；真实 GSC/DataForSEO 仍需凭据，保留为 post-MVP 项，不计入本地 MVP 阻塞。真实 GitHub smoke 只验证 publisher/状态写回，不代表内容质量或 merge 后验证已完成。
+> - **门禁**：`npm run check:all` 全绿（48 文件 / 468 tests，新增 2 个 replay 用例）。
 
 > **2026-11-13 补登：growth-agent 已加 loom 自动发证，闭合 final_id 契约缺口。**
 >
@@ -30,8 +38,8 @@ State of growth-agent as of 2026-10-28.
 
 > 一句话：**W11 把「装配完成但没人调用」的循环接成了真正可运行的东西**——批次有了
 > 触发器（CLI + compose 调度）、任务有了持久化上下文、生产批次有了草稿来源和真实证据，
-> GSC 的 online 传输也从占位实现换成了真代码。剩余阻塞全部在真实凭据/真实属性验证，
-> 外加一个已知缺口：零凭据的离线 fixture 产不出候选。
+> GSC 的 online 传输也从占位实现换成了真代码。真实 GitHub PR 已在专用测试仓跑通；
+> 真实凭据仍是 post-MVP 项，零凭据本地日跑已由 `GA_GSC_OFFLINE_ROLLING=1` 补齐。
 
 ## 2026-11-11 batch unhealthy：幂等误判更正（只读实测）
 
