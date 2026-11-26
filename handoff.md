@@ -5,11 +5,18 @@
 > 本段是本产品唯一活跃待办入口；详细背景见下方原有章节。完成一项改 `[x]`，并在“最近变更 / Recently shipped”留证据。
 > 最近同步：2026-11-19
 
-- [ ] **真实 SERP / GSC 凭据** — 状态：blocked（本机未发现 DataForSEO 或 GSC OAuth 凭据）；下一步：DataForSEO Basic Auth + GSC OAuth；本地零凭据链路已可用，真实 online 数据仍待接入。
+<!-- tier0:todos v1 -->
+| id | title | status | priority | owner | next | evidence | updated |
+|---|---|---|---|---|---|---|---|
+| GA-01 | 真实 SERP / GSC 凭据 | blocked | p1 | owner | DataForSEO Basic Auth + GSC OAuth | - | 2026-11-19 |
+| GA-02 | 成稿模型切 `doubao-seed-1-6` | blocked | p1 | owner | SSO 重登后登记并切换，提升营销文案质量 | - | 2026-11-19 |
+| GA-03 | 生产全自动发证 `final_id` | open | p2 | self | 打通上游 operator 自动发证 | - | 2026-11-19 |
+<!-- /tier0:todos -->
+
+### 已完成（历史）
+
 - [x] **真实 GitHub PR 闭环** — 状态：已完成（2026-11-22）；证据：`scripts/smoke/github-pr-e2e.mjs` 在 `bayernjf/git-e2e-test` 真实建 PR #19，幂等复用与状态查询通过，收尾自动关 PR/删分支；报告 `data/e2e/github-pr-2026-11-22T14-32-39-930Z.json`。
 - [x] **零凭据本地日跑产候选** — 状态：已完成（2026-11-22）；GSC fixture 按输入维度回放，`GA_GSC_OFFLINE_ROLLING=1` 时按昨日 UTC 锚点滚动；本机 `daily` 当日产出 1 write + 1 fix。
-- [ ] **成稿模型切 `doubao-seed-1-6`** — 状态：blocked by E1；下一步：SSO 重登后登记并切换，提升营销文案质量。
-- [ ] **生产全自动发证 `final_id`** — 状态：open；growth-agent 自身不发 `final_id`，靠上游 operator 线下发证；生产全自动发证仍未打通。
 
 > **2026-11-22 补登：真实 GitHub PR 闭环 + 零凭据滚动回放（Tier 0 本地 MVP 收口）。**
 >
@@ -40,6 +47,7 @@ State of growth-agent as of 2026-10-28.
 > 触发器（CLI + compose 调度）、任务有了持久化上下文、生产批次有了草稿来源和真实证据，
 > GSC 的 online 传输也从占位实现换成了真代码。真实 GitHub PR 已在专用测试仓跑通；
 > 真实凭据仍是 post-MVP 项，零凭据本地日跑已由 `GA_GSC_OFFLINE_ROLLING=1` 补齐。
+
 
 ## 2026-11-11 batch unhealthy：幂等误判更正（只读实测）
 
