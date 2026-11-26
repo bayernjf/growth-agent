@@ -18,6 +18,25 @@
 - [x] **真实 GitHub PR 闭环** — 状态：已完成（2026-11-22）；证据：`scripts/smoke/github-pr-e2e.mjs` 在 `bayernjf/git-e2e-test` 真实建 PR #19，幂等复用与状态查询通过，收尾自动关 PR/删分支；报告 `data/e2e/github-pr-2026-11-22T14-32-39-930Z.json`。
 - [x] **零凭据本地日跑产候选** — 状态：已完成（2026-11-22）；GSC fixture 按输入维度回放，`GA_GSC_OFFLINE_ROLLING=1` 时按昨日 UTC 锚点滚动；本机 `daily` 当日产出 1 write + 1 fix。
 
+> **2026-11-27 补登：`/metrics` 端点（Tier0 collector，OB-01）。**
+>
+> - ✅ 新增 `src/observability/prometheus.ts` + `src/api/metrics.ts`，`serve.ts` 挂载
+>   `GET /metrics`（与 health/webhook 同级，无鉴权，只暴露聚合计数）。
+> - ✅ 指标族：`growth_agent_up` / `growth_agent_uptime_seconds` /
+>   `growth_agent_metrics_snapshot_timestamp_seconds` / `growth_agent_tasks{status}` /
+>   `growth_agent_tasks_total` / `growth_agent_tasks_by_type{task_type}` /
+>   `growth_agent_api_calls{provider}` / `growth_agent_api_calls_total` /
+>   `growth_agent_api_cost_micros{provider}` / `growth_agent_api_cost_micros_total` /
+>   `growth_agent_webhook_deliveries{source,result}` / `growth_agent_webhook_deliveries_total` /
+>   `growth_agent_channel_failures{channel}` / `growth_agent_gsc_snapshots`。
+>   不导出 task id / PR ref（含仓库 URL）/ decision id / delivery id / event payload /
+>   failure error text。
+> - ✅ compose：`orchestrator` 加 `tier0-net`（external），collector 用
+>   `orchestrator:8790` 抓取。
+> - ✅ 测试 `tests/metrics.test.ts` 2 例；全量 49 文件 / 472 tests 全绿、typecheck 0、
+>   lint 0、`docker compose config` OK。
+> - ⬜ 端到端现测待 observability 侧拉起后补（`growth_agent_up=1` + 面板取到样本）。
+
 > **2026-11-22 补登：真实 GitHub PR 闭环 + 零凭据滚动回放（Tier 0 本地 MVP 收口）。**
 >
 > - **真实 GitHub PR**：新增 `scripts/smoke/github-pr-e2e.mjs`，用真实 `GitHubPublisher` 跑 daily → zeus 审批 → production sweep → 建 PR；目标仓固定为 `bayernjf/git-e2e-test`（非该仓需 `GA_E2E_ALLOW_ANY_REPO=1`），默认验证后关 PR 并删任务分支。实跑 PR #19：创建成功、head branch 与 task 匹配、PR body 带 task id、重复 `openChange` 返回同一 PR、`getChangeStatus=open`，全部断言通过。报告落在 `data/e2e/`（gitignored）。

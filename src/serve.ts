@@ -3,6 +3,8 @@ import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 import { loadConfig } from './config.js';
 import { createHealthApp } from './api/health.js';
+import { createMetricsApp } from './api/metrics.js';
+import { GrowthAgentMetricsService } from './observability/prometheus.js';
 import { createZeusWebhookApp } from './api/webhooks/zeus.js';
 import { createGithubWebhookApp } from './api/webhooks/github.js';
 import { migrateUp } from './storage/migrate.js';
@@ -54,6 +56,10 @@ async function main(): Promise<void> {
       zeusMode: config.zeusMode,
       getStartupReport: () => startupReport,
     }),
+  );
+  app.route(
+    '/',
+    createMetricsApp({ service: new GrowthAgentMetricsService(driver) }),
   );
   app.route(
     '/webhooks/zeus',
