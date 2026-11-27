@@ -10,7 +10,7 @@
 |---|---|---|---|---|---|---|---|
 | GA-01 | 真实 SERP / GSC 凭据 | blocked | p1 | owner | DataForSEO Basic Auth + GSC OAuth | - | 2026-11-19 |
 | GA-02 | 成稿模型切 `doubao-seed-1-6` | blocked | p1 | owner | SSO 重登后登记并切换，提升营销文案质量 | - | 2026-11-19 |
-| GA-03 | 生产全自动发证 `final_id` | open | p2 | self | 打通上游 operator 自动发证 | - | 2026-11-19 |
+| GA-03 | 生产全自动发证 `final_id` | open | p2 | self | growth-agent 侧 `issueFinal()` + draft 自动发证已落地（2026-11-13）；剩上游 operator 真实提供 assemble 材料并端到端复测 | `handoff.md`（2026-11-13 补登）；commit `5bb9c7e`/`f6aee1c` | 2026-11-27 |
 <!-- /tier0:todos -->
 
 ### 已完成（历史）
