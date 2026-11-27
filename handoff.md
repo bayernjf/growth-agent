@@ -31,8 +31,8 @@
 >   `growth_agent_channel_failures{channel}` / `growth_agent_gsc_snapshots`。
 >   不导出 task id / PR ref（含仓库 URL）/ decision id / delivery id / event payload /
 >   failure error text。
-> - ✅ compose：`orchestrator` 加 `tier0-net`（external），collector 用
->   `orchestrator:8790` 抓取。
+> - ✅ compose：`docker-compose.local.yml` 已让 `orchestrator` 连 `tier0-net`
+>   （external），collector 用 `orchestrator:8790` 抓取；主 compose 保持自包含。
 > - ✅ 测试 `tests/metrics.test.ts` 2 例；全量 49 文件 / 472 tests 全绿、typecheck 0、
 >   lint 0、`docker compose config` OK。
 > - ⬜ 端到端现测待 observability 侧拉起后补（`growth_agent_up=1` + 面板取到样本）。
