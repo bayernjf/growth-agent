@@ -35,7 +35,7 @@
 >   （external），collector 用 `orchestrator:8790` 抓取；主 compose 保持自包含。
 > - ✅ 测试 `tests/metrics.test.ts` 2 例；全量 49 文件 / 472 tests 全绿、typecheck 0、
 >   lint 0、`docker compose config` OK。
-> - ⬜ 端到端现测待 observability 侧拉起后补（`growth_agent_up=1` + 面板取到样本）。
+> - ✅ 端到端现测：`growth_agent_up{exported_job="growth-agent"}=1`，Prometheus 取到样本。
 
 > **2026-11-22 补登：真实 GitHub PR 闭环 + 零凭据滚动回放（Tier 0 本地 MVP 收口）。**
 >
